@@ -114,6 +114,14 @@ class TestVectorStoreIndexing:
         store.index_chunks(doc_hash, CHUNKS)
         assert store.is_indexed(doc_hash) is True
 
+    def test_fetch_chunks_restores_index_order(self, store):
+        store.index_chunks("doc1", CHUNKS)
+        assert store.fetch_chunks("doc1") == CHUNKS
+
+    def test_empty_chunk_list_is_rejected(self, store):
+        with pytest.raises(ValueError):
+            store.index_chunks("doc1", [])
+
     def test_reindexing_same_hash_is_a_noop(self, store):
         doc_hash = "doc1"
         store.index_chunks(doc_hash, CHUNKS)
@@ -138,6 +146,23 @@ class TestVectorStoreSearch:
         # Both rag-related chunks (1 and 3) should be favored over the
         # unrelated car chunk.
         assert CHUNKS[2] not in results
+
+    def test_remote_client_uses_a_short_timeout(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        import app.agent.vectorstore as vectorstore
+
+        monkeypatch.setattr(vectorstore.get_settings(), "qdrant_use_memory", False)
+        monkeypatch.setattr(vectorstore.get_settings(), "qdrant_timeout_seconds", 5.0)
+        captured: dict = {}
+
+        def fake_client(*args, **kwargs):
+            captured["kwargs"] = kwargs
+            return MagicMock()
+
+        monkeypatch.setattr(vectorstore, "QdrantClient", fake_client)
+        vectorstore.VectorStore()
+        assert captured["kwargs"]["timeout"] == 5.0
 
     def test_rerank_reorders_by_relevance(self, store):
         docs = [CHUNKS[2], CHUNKS[0]]  # car chunk first, cat chunk second

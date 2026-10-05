@@ -9,11 +9,9 @@ Two scripts, two layers of the system:
 
 Both scripts run against the same labeled dataset: `corpus.json` (16 hand-written passages about RAG concepts) and `dataset.jsonl` (20 questions, each with gold relevant-chunk indices and a `difficulty` tag — `easy`/`medium`/`hard`, where *hard* questions are deliberately paraphrased away from the corpus's exact wording to require hybrid retrieval or query rewriting).
 
-## Honesty about what's real vs. a dry run
+## What is real
 
-This project was built inside a sandboxed environment whose outbound network is restricted to PyPI/npm/GitHub — **HuggingFace Hub and the Groq API are both unreachable there.** That means the actual retrieval-quality and generation-quality numbers in `results/retrieval_eval_report_real.md` and `results/generation_eval_report_real.md` were **not** produced inside that sandbox. They were produced by running the two commands below on a normal machine with internet access.
-
-Both scripts also support `--dry-run`, which swaps in deterministic fake embedding/LLM components (the same ones used in `backend/tests/`) so the harness itself — indexing, retrieval, fusion, scoring aggregation, report generation — can be smoke-tested with zero network access. The dry-run output lives in `results/*_dry_run.json` / `*_dry_run.md` and is clearly labeled `"dry_run": true`; **treat those numbers as a proof the harness runs, not as a measurement of retrieval or answer quality.**
+Only measured numbers are published here. Results come from real PDFs, real embeddings and real Groq calls. The older 16-passage scripts (`run_retrieval_eval.py`, `run_generation_eval.py`) keep a `--dry-run` flag that uses fake models to smoke-test the harness; their output is never committed. The headline benchmark is `make_bench.py` + `run_bench.py` (see the top-level README and `results/README.md`).
 
 ## Reproducing the real numbers
 

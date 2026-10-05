@@ -2,7 +2,7 @@
 
 A self-healing Retrieval-Augmented Generation agent that detects *why* an answer is bad — bad retrieval or bad grounding — and automatically escalates its own strategy before retrying.
 
-This is a from-scratch rebuild of [gurezende/SelfHealingRAG](https://github.com/gurezende/SelfHealingRAG), restructured as a production-shaped portfolio project: a FastAPI + LangGraph backend, a Next.js frontend, Groq for inference, persistent Qdrant + Redis, Docker, a 55-test suite, and an evaluation harness. Credit to [Gustavo R. Santos](https://gustavorsantos.me) for the original concept and graph design.
+This is a from-scratch rebuild of [gurezende/SelfHealingRAG](https://github.com/gurezende/SelfHealingRAG), restructured as a production-shaped portfolio project: a FastAPI + LangGraph backend, a Next.js frontend, Groq for inference, persistent Qdrant + Redis, Docker, a 111-test suite, and a real-PDF evaluation harness. Credit to [Gustavo R. Santos](https://gustavorsantos.me) for the original concept and graph design.
 
 ## Why the rename
 
@@ -19,7 +19,7 @@ This is a from-scratch rebuild of [gurezende/SelfHealingRAG](https://github.com/
 | LLM calls | Unguarded `client.chat.completions.create(...)` — any API error crashes the run | Retry with exponential backoff, then fall back to a smaller model, with per-call latency/token capture |
 | UI coupling | Business logic (`nodes.py`) imports `streamlit` directly — can't run headlessly | Nodes are pure functions returning plain dicts; UI is a separate Next.js app talking to a FastAPI backend |
 | Caching | None — same question re-embeds and re-asks every time | Redis-backed embedding/answer cache, degrades to a no-op if Redis is unreachable rather than crashing (see [Caching](#caching)) |
-| Tests | None | 67 tests, 93% coverage (see [Testing](#testing)) |
+| Tests | None | 111 tests (see [Testing](#testing)) |
 | Evaluation | None | Labeled 20-question eval set, offline retrieval metrics + baseline-vs-healed generation metrics (see [Evaluation](#evaluation)) |
 | Deployment | `streamlit run app.py` only | Dockerized (backend, frontend, Qdrant, Redis via `docker-compose`) |
 | API hardening | None — single-user local script | Request-ID correlation, Redis-backed rate limiting, typed exception handling (no leaked stack traces), upload size limits, liveness + readiness health checks |
@@ -67,7 +67,7 @@ What's *not* cached, on purpose: judge scores. Caching the judge's verdict along
 - **Orchestration:** LangGraph (kept — it's the right tool for explicit retry/branching state machines; this is the one piece of the original stack that wasn't swapped out)
 - **Backend:** FastAPI (Python)
 - **Frontend:** Next.js / React (TypeScript)
-- **Model layer:** Groq (free tier) — `llama-3.3-70b-versatile` primary, `llama-3.1-8b-instant` fallback and judge model
+- **Model layer:** Groq (free tier) — `openai/gpt-oss-120b` primary, `openai/gpt-oss-20b` fallback, `qwen/qwen3.8-27b` judge (a different model family from the generator on purpose)
 - **Embeddings:** FastEmbed, local (`all-MiniLM-L6-v2` dense, Qdrant's BM25 sparse) — no API key or cost
 - **Retrieval & memory:** Qdrant (persistent, named dense + sparse vectors)
 - **Data layer:** Redis (embedding/answer cache)
@@ -98,7 +98,7 @@ ResilientRAG/
 │   ├── dataset.jsonl           # 20 questions with gold relevant chunks + difficulty tags
 │   ├── run_retrieval_eval.py  # precision@k / recall@k per retrieval mode
 │   ├── run_generation_eval.py # baseline vs. self-healing, scored end-to-end
-│   └── results/                # output of both scripts (dry-run + real)
+│   └── results/                # measured results only (bench_*.md / .json)
 ├── docker-compose.yml
 └── .env.example
 ```
@@ -137,7 +137,7 @@ Unit + integration tests use a fake LangGraph-compatible `VectorStore` and `LLMC
 
 ```
 $ cd backend && pytest tests/ --cov=app --cov-report=term-missing
-67 passed in 2.80s
+111 passed
 ```
 
 | Module | Coverage |
@@ -160,55 +160,30 @@ What's actually exercised, not just covered:
 - **Failures don't leak internals**: `test_hardening.py` forces a retrieval-backend exception through the real FastAPI app and asserts the response is a clean 503 with no exception class name or traceback text in the body — and does the same for an arbitrary unhandled exception (clean 500 + correlation ID).
 - **The rate limiter fails open**: `test_unavailable_redis_fails_open` asserts requests are still served when Redis itself is down, so the limiter can't become a single point of failure.
 
-## Completeness / what's actually been verified
+## Measured results
 
-Every code path below was genuinely exercised, not just written — here's exactly how, so you can judge where the line between "tested" and "assumed" actually sits:
+Every number below was produced by running the code in this repo against real PDFs, real embeddings and real Groq calls. No mocked or dry-run figures are reported. Reproduce with `eval/make_bench.py` then `eval/run_bench.py`; raw per-question output is in `eval/results/*.json`.
 
-| Layer | Verified how | Result |
-|---|---|---|
-| Core agent logic (healing loop, judges, retries, LLM resilience, caching) | 67 automated tests, run clean on a fresh `pip install` | 67/67 passing, 93% coverage |
-| Document upload → PDF parsing → chunking | **Live HTTP request** against a running `uvicorn` server, with a real generated PDF, through the real `/documents` endpoint | Real response: `{"num_chunks": 9, ...}` |
-| API hardening (clean errors, request IDs, health checks) | **Live HTTP requests** against the running server, including deliberately triggering a real network failure | Confirmed: clean 503 (not a raw stack trace), `X-Request-ID` header present, `/health/ready` correctly reports per-dependency status |
-| Frontend build | `npm run build` | Compiles clean, 104KB first-load JS |
-| Retrieval quality (precision/recall per mode), generation quality (baseline vs. healed scores) | Harness code runs end-to-end in `--dry-run` (fake models) | Harness is proven to run correctly; **quality numbers are not real** — see [Evaluation](#evaluation) |
-| Docker Compose (Qdrant + Redis + backend + frontend together) | **Not run** — this build environment has no Docker daemon available | Compose file is written and each image builds from a Dockerfile that mirrors the locally-verified install steps, but the 4-service wiring itself hasn't been exercised live |
-| `/query` end-to-end with a real LLM | **Not run** — this build environment's network reaches PyPI/npm/GitHub only, not HuggingFace Hub or the Groq API | Code path is unit-tested with fake LLM/embedding clients (see judge/graph tests above); the live network call itself is unverified until you run it |
+**Benchmark.** Four generated PDFs of different shape (a numbered manual, continuous prose, topic-shifting field notes, Python source). Facts are invented, so a model cannot answer from memory. Each question has an exact answer key, and correctness is a string match, not an LLM opinion. Each question is asked in the document's own wording and as a paraphrase. Intervals are 95% Wilson.
 
-**Bottom line:** the agent logic, the API layer, and the hardening are genuinely tested, including live HTTP calls where that was possible in this sandbox. The two things that remain unverified are specifically the two that need outbound internet this environment doesn't have: a live multi-container `docker compose up`, and an actual Groq-backed `/query` call. Both should just work — the code paths they'd exercise are the same ones already covered by the mocked tests — but "should work" and "verified" are different claims, and this table is here so you know which is which before you put specific numbers in front of anyone.
+### Retrieval precision (top-3 contains the whole answer sentence)
 
-## Evaluation
+See [`eval/results/bench_chunking_sweep.md`](eval/results/bench_chunking_sweep.md). Headline: **chunk size mattered far more than chunking strategy.** Recursive splitting at 500 characters hit 100% (99–100%) with hybrid+rerank and 98% (95–99%) with dense only, against 89% (85–92%) and 80% (75–84%) at 1,600 characters. Semantic chunking beat recursive only at the old 1,600 size and did not beat it at 500. The default is therefore 500 characters, not the usual 300–500 *token* advice. Caveat: this benchmark is single-fact lookup; explanatory questions that need a wide passage may prefer larger chunks, which is what the healing loop's growing retrieval budget is for.
 
-### What dataset is used
+### End-to-end accuracy, latency, healing
 
-`eval/corpus.json` + `eval/dataset.jsonl` — **a hand-authored dataset, not a public benchmark.** 16 short passages covering RAG concepts (dense vs. sparse retrieval, RRF fusion, cross-encoder reranking, chunking, LLM-as-judge, faithfulness, self-healing, caching, resilience, precision/recall, Docker), and 20 questions against them with gold-labeled relevant-chunk indices and a difficulty tag per question (`easy`/`medium`/`hard`).
+See [`eval/results/bench_e2e.md`](eval/results/bench_e2e.md): baseline (tutorial setup: 1,600-char chunks, dense search, no healing), the agent without healing, and the full agent, 8 questions × 4 documents × 2 wordings. It includes accuracy with intervals, p50/p95 latency, token cost, a paired fixed-vs-broken count, and full healing traces for answers that started wrong.
 
-Why hand-authored instead of a public dataset like SQuAD or Natural Questions: **precision/recall evaluation requires knowing which chunks are actually relevant to each question**, and public QA datasets don't come with "relevant chunk indices for a 16-passage corpus you invented" — that labeling has to happen regardless of where the source text comes from. Writing the corpus myself also let me build in the thing that actually tests this project's premise: the `hard`-tier questions (q17-q20) are deliberately paraphrased away from the corpus's own wording ("my app returned relevant passages but the answer still contained made-up facts" instead of "what is a hallucination") specifically so that plain dense retrieval is expected to struggle and hybrid/reranking/query-rewriting have something real to demonstrate improvement on. A random public PDF wouldn't give you that difficulty gradient for free.
+Honest limits of that run: Groq's rate limits made some calls fail upstream; those are counted separately and excluded from accuracy, never scored as correct. Latency in that run is dominated by rate-limit backoff, so treat it as a ceiling for a free-tier key, not a property of the code.
 
-If you want a more "recognizable" dataset for portfolio purposes — say, a real public-domain PDF or a known benchmark subset — I can swap or add one; paste a URL or tell me which source and I'll rebuild the gold labels against it. The methodology (precision@k/recall@k, baseline-vs-healed scoring) doesn't change either way, only the source text does.
+### Reproduce
 
-### The two scripts
-
-See **[`eval/README.md`](eval/README.md)** for full detail. Short version:
-
-- `run_retrieval_eval.py` — precision@3 / recall@3 per retrieval mode against the 20 labeled questions.
-- `run_generation_eval.py` — baseline (no healing) vs. self-healing, scored end-to-end through Groq.
-
-**Both were authored and smoke-tested with `--dry-run`** inside this build environment, whose outbound network is restricted to PyPI/npm/GitHub — HuggingFace Hub (needed for real embeddings) and the Groq API are both unreachable from here. The dry-run mode swaps in deterministic fake embedding/LLM components (the same fixtures the test suite uses) purely to prove the harness runs end-to-end; **the numbers below are not real retrieval or answer quality** and are labeled `"dry_run": true` in the output files. Real numbers require running the two commands in `eval/README.md` on a machine with normal internet access and a Groq key — do that before citing these in a portfolio write-up.
-
-<details>
-<summary>Dry-run harness output (proof it runs, not a quality measurement)</summary>
-
-Generation eval (baseline vs. self-healing), scripted with a judge that fails easy questions never, medium questions once, hard questions twice:
-
-| Metric | Baseline | Self-Healing |
-|---|---|---|
-| Mean combined score | 0.758 | 0.925 |
-| Pass rate (≥0.8) | 65.0% | 100.0% |
-
-Questions improved: 7/20. Mean retries: 0.55/question. Mean token overhead: 24.8/question.
-
-Full output: [`eval/results/generation_eval_report_dry_run.md`](eval/results/generation_eval_report_dry_run.md), [`eval/results/retrieval_eval_report_dry_run.md`](eval/results/retrieval_eval_report_dry_run.md).
-</details>
+```bash
+cd backend
+uv run --extra dev python ../eval/make_bench.py
+uv run --extra dev python ../eval/run_bench.py chunking --tag sweep --configs recursive_character@500 recursive_character semantic auto
+uv run --extra dev python ../eval/run_bench.py e2e --per-doc 8 --workers 2
+```
 
 ## Trade-offs and things deliberately left out
 

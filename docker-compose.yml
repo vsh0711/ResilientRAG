@@ -10,6 +10,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
     volumes:
@@ -22,11 +23,27 @@ services:
     environment:
       - GROQ_API_KEY=${GROQ_API_KEY}
       - QDRANT_URL=http://qdrant:6333
+      - QDRANT_TIMEOUT_SECONDS=5
       - REDIS_URL=redis://redis:6379/0
-      - API_CORS_ORIGINS=["http://localhost:3000"]
+      - API_CORS_ORIGINS=http://localhost:3000
+      - TRUST_PROXY=true
+      - WARMUP_MODELS=true
+      - RATE_LIMIT_PER_MINUTE=60
+      - IP_RATE_LIMIT_PER_MINUTE=1200
+      - MAX_CONCURRENT_QUERIES=12
+      - UVICORN_WORKERS=2
+      - GROQ_PRIMARY_MODEL=${GROQ_PRIMARY_MODEL:-openai/gpt-oss-120b}
+      - GROQ_FALLBACK_MODEL=${GROQ_FALLBACK_MODEL:-openai/gpt-oss-20b}
+      - GROQ_JUDGE_MODEL=${GROQ_JUDGE_MODEL:-qwen/qwen3.8-27b}
     depends_on:
       - qdrant
       - redis
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 120s
     volumes:
       - uploads_data:/tmp/resilientrag_uploads
 
@@ -35,9 +52,10 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - API_PROXY_TARGET=http://backend:8000
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   qdrant_data:

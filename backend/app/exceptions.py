@@ -17,3 +17,24 @@ class RetrievalBackendError(Exception):
 
 class PayloadTooLargeError(Exception):
     """Raised when an uploaded file exceeds the configured size limit."""
+
+
+class UnreadableDocumentError(Exception):
+    """Raised when an upload is not a readable, text-bearing PDF."""
+
+
+def retrieval_error_detail(exc: BaseException) -> str:
+    """A client-safe sentence. The raw exception stays in the server log."""
+    message = str(exc).lower()
+    if "deadline" in message:
+        reason = "the question took too long"
+    elif any(token in message for token in ("qdrant", "6333", "connection", "connect", "timed out", "timeout", "unreachable")):
+        reason = "Qdrant is unreachable"
+    elif any(token in message for token in ("model", "embed", "huggingface", "onnx", "fastembed")):
+        reason = "the embedding model could not be loaded"
+    else:
+        reason = "a retrieval dependency failed"
+    return (
+        f"Retrieval backend is currently unavailable: {reason}. "
+        "Please try again shortly."
+    )

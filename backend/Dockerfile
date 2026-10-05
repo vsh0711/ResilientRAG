@@ -12,6 +12,9 @@ COPY app ./app
 RUN pip install --no-cache-dir -e .
 
 ENV PYTHONUNBUFFERED=1
+ENV WARMUP_MODELS=true
+ENV QDRANT_TIMEOUT_SECONDS=5
+ENV UVICORN_WORKERS=2
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS}"]

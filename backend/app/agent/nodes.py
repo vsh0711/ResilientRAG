@@ -134,18 +134,22 @@ def make_generate_node(llm: ResilientLLMClient, cache: AnswerCache | None = None
             docs=state["retrieved_docs"]
         )
 
+        cacheable = True
         try:
             result = llm.chat_text(system_prompt=system_prompt, user_prompt=state["query"])
             answer = result.content
             prompt_tokens, completion_tokens = result.prompt_tokens, result.completion_tokens
         except LLMCallError:
+            # A failure is not an answer. Caching it would keep serving the
+            # outage for the whole TTL after Groq recovers.
+            cacheable = False
             answer = (
                 "I'm temporarily unable to generate an answer due to an upstream "
                 "model error. Please try again in a moment."
             )
             prompt_tokens = completion_tokens = 0
 
-        if document_hash:
+        if document_hash and cacheable:
             cache.set(document_hash, state["query"], retrieval_mode, {"answer": answer})
 
         latency_ms = (time.perf_counter() - t0) * 1000

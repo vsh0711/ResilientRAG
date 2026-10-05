@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from app.agent.cache import SafeRedisCache
 from app.exceptions import RetrievalBackendError
 from app.main import app
+from app.config import get_settings
 from app.middleware import RateLimitMiddleware
 
 
@@ -138,6 +139,50 @@ class TestRateLimiting:
 
         response = TestClient(built).get("/thing")
         assert response.status_code == 200
+
+
+class TestSessionScopedLimits:
+    def _client(self):
+        from starlette.applications import Starlette
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+
+        counts: dict[str, int] = {}
+        fake_cache = MagicMock()
+        fake_cache.available = True
+
+        def incr(key, ttl_seconds):
+            counts[key] = counts.get(key, 0) + 1
+            return counts[key]
+
+        fake_cache.increment.side_effect = incr
+
+        async def ok(request):
+            return PlainTextResponse("ok")
+
+        inner_app = Starlette(routes=[Route("/thing", ok)])
+        inner_app.add_middleware(RateLimitMiddleware, cache=fake_cache)
+        return TestClient(inner_app.build_middleware_stack()), counts
+
+    def test_two_people_on_one_ip_do_not_share_a_bucket(self):
+        client, _ = self._client()
+        limit = get_settings().rate_limit_per_minute
+        for _ in range(limit):
+            assert client.get("/thing", headers={"X-Session-Id": "person-aaaaaaaa"}).status_code == 200
+        assert client.get("/thing", headers={"X-Session-Id": "person-aaaaaaaa"}).status_code == 429
+        assert client.get("/thing", headers={"X-Session-Id": "person-bbbbbbbb"}).status_code == 200
+
+    def test_malformed_session_ids_fall_back_to_the_ip_bucket(self):
+        client, counts = self._client()
+        client.get("/thing", headers={"X-Session-Id": "x"})
+        assert all(":ip:" in key for key in counts)
+
+    def test_rotating_session_ids_still_hits_the_ip_ceiling(self, monkeypatch):
+        monkeypatch.setattr(get_settings(), "ip_rate_limit_per_minute", 5)
+        client, _ = self._client()
+        codes = [client.get("/thing", headers={"X-Session-Id": f"spray-{i:08d}"}).status_code for i in range(8)]
+        assert codes[:5] == [200] * 5
+        assert 429 in codes[5:]
 
 
 class TestRedisIncrement:

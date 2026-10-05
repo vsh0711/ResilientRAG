@@ -53,6 +53,13 @@ def _reranker_model() -> TextCrossEncoder:
     return TextCrossEncoder(model_name=get_settings().reranker_model_name)
 
 
+def embed_texts(texts: list[str]):
+    """Dense embeddings as an (n, dim) array, used by semantic chunking."""
+    import numpy as np
+
+    return np.array(list(_dense_model().embed(texts)))
+
+
 def reciprocal_rank_fusion(
     ranked_lists: list[list[str]], k: int = 60
 ) -> list[str]:
@@ -77,7 +84,10 @@ class VectorStore:
         elif settings.qdrant_use_memory:
             self._client = QdrantClient(":memory:")
         else:
-            self._client = QdrantClient(url=settings.qdrant_url)
+            self._client = QdrantClient(
+                url=settings.qdrant_url,
+                timeout=settings.qdrant_timeout_seconds,
+            )
 
     def collection_name(self, document_hash: str) -> str:
         return f"{self._settings.qdrant_collection}_{document_hash}"
@@ -85,13 +95,50 @@ class VectorStore:
     def is_indexed(self, document_hash: str) -> bool:
         return self._client.collection_exists(self.collection_name(document_hash))
 
+    def fetch_chunks(self, document_hash: str) -> list[str]:
+        """Read chunk text back out of Qdrant, in index order.
+
+        Point ids are the chunk positions assigned at upsert time, so a
+        replica that lost its local JSON can still rebuild agent state.
+        """
+        collection = self.collection_name(document_hash)
+        records, offset = self._client.scroll(
+            collection_name=collection,
+            limit=256,
+            with_payload=True,
+            with_vectors=False,
+        )
+        points = list(records)
+        while offset is not None:
+            records, offset = self._client.scroll(
+                collection_name=collection,
+                limit=256,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            points.extend(records)
+        points.sort(key=lambda point: int(point.id))
+        return [point.payload["text"] for point in points if point.payload and point.payload.get("text")]
+
     def index_chunks(self, document_hash: str, chunks: list[str]) -> None:
         """Embed and upsert chunks, but only if not already indexed. This
         is the fix for the "re-embed the whole doc on every retry" bug."""
+        if not chunks or not any(chunk.strip() for chunk in chunks):
+            raise ValueError("No text chunks to index")
+
         collection = self.collection_name(document_hash)
         if self._client.collection_exists(collection):
-            logger.info("Collection %s already indexed, skipping re-embed", collection)
-            return
+            try:
+                info = self._client.get_collection(collection)
+                existing = info.points_count or 0
+            except Exception:
+                existing = 1
+            if existing > 0:
+                logger.info("Collection %s already indexed, skipping re-embed", collection)
+                return
+            logger.warning("Collection %s exists but is empty; rebuilding", collection)
+            self._client.delete_collection(collection)
 
         dense_embeddings = list(_dense_model().embed(chunks))
         sparse_embeddings = list(_sparse_model().embed(chunks))

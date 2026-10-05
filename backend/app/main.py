@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.agent.cache import SafeRedisCache
 from app.config import get_settings
-from app.exceptions import PayloadTooLargeError, RetrievalBackendError
+from app.exceptions import PayloadTooLargeError, RetrievalBackendError, UnreadableDocumentError, retrieval_error_detail
 from app.middleware import RateLimitMiddleware, RequestIDLogFilter, RequestIDMiddleware
 from app.routers import documents, query
 
@@ -23,6 +24,28 @@ for handler in logging.getLogger().handlers:
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+
+def _warmup_models() -> None:
+    from app.agent.vectorstore import _dense_model, _reranker_model, _sparse_model
+
+    _dense_model()
+    _sparse_model()
+    _reranker_model()
+    logger.info("Embedding models are loaded")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if get_settings().warmup_models:
+        import asyncio
+
+        try:
+            await asyncio.to_thread(_warmup_models)
+        except Exception:
+            logger.exception("Embedding model warmup failed; the first upload will retry it")
+    yield
+
+
 app = FastAPI(
     title="ResilientRAG API",
     description=(
@@ -33,6 +56,7 @@ app = FastAPI(
         "the retry budget is exhausted."
     ),
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -59,8 +83,13 @@ async def retrieval_backend_error_handler(request: Request, exc: RetrievalBacken
     logger.error("Retrieval backend error: %s", exc, exc_info=True)
     return JSONResponse(
         status_code=503,
-        content={"detail": "Retrieval backend is currently unavailable. Please try again shortly."},
+        content={"detail": retrieval_error_detail(exc)},
     )
+
+
+@app.exception_handler(UnreadableDocumentError)
+async def unreadable_document_handler(request: Request, exc: UnreadableDocumentError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
 @app.exception_handler(PayloadTooLargeError)
@@ -91,6 +120,40 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+_model_check: tuple[float, list[str]] = (0.0, [])
+
+
+async def _missing_llm_models() -> list[str]:
+    """Configured Groq models the key cannot see. Cached for five minutes.
+
+    Providers retire models. A retired name makes every answer and every
+    judge call fail, and nothing else in the stack notices, so readiness does.
+    """
+    import asyncio
+    import time
+
+    global _model_check
+    if not settings.groq_api_key:
+        return []
+    checked_at, missing = _model_check
+    if checked_at and time.monotonic() - checked_at < 300:
+        return missing
+
+    def _list() -> list[str]:
+        from groq import Groq
+
+        have = {m.id for m in Groq(api_key=settings.groq_api_key, timeout=5).models.list().data}
+        wanted = {settings.groq_primary_model, settings.groq_fallback_model, settings.groq_judge_model}
+        return sorted(wanted - have)
+
+    try:
+        missing = await asyncio.to_thread(_list)
+    except Exception:
+        return []  # Groq unreachable is a different problem; do not claim models are missing
+    _model_check = (time.monotonic(), missing)
+    return missing
+
+
 @app.get("/health/ready")
 async def readiness() -> JSONResponse:
     """Readiness probe — reports dependency status without ever raising.
@@ -108,12 +171,15 @@ async def readiness() -> JSONResponse:
         qdrant_ok = False
         qdrant_detail = str(exc)
 
+    llm_missing = await _missing_llm_models()
+    llm_ok = not llm_missing
     body = {
-        "status": "ok" if qdrant_ok else "degraded",
+        "status": "ok" if (qdrant_ok and llm_ok) else "degraded",
         "dependencies": {
             "redis_cache": {"available": redis_cache.available},
             "qdrant": {"available": qdrant_ok, "detail": qdrant_detail},
             "groq_api_key_configured": bool(settings.groq_api_key),
+            "llm_models": {"available": llm_ok, "missing": llm_missing},
         },
     }
-    return JSONResponse(status_code=200 if qdrant_ok else 503, content=body)
+    return JSONResponse(status_code=200 if (qdrant_ok and llm_ok) else 503, content=body)

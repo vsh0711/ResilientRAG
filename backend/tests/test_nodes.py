@@ -89,6 +89,23 @@ class TestGenerateNode:
         last_prompt = fake_llm.chat_text_calls[-1].lower()
         assert "faithful" in last_prompt or "support" in last_prompt or "claim" in last_prompt
 
+    def test_model_error_is_not_cached(self, fake_llm):
+        from unittest.mock import MagicMock
+
+        from app.agent.llm import LLMCallError
+
+        cache = MagicMock()
+        cache.get.return_value = None
+
+        class Boom:
+            def chat_text(self, **kwargs):
+                raise LLMCallError(message="down", attempts=1)
+
+        node = make_generate_node(Boom(), cache=cache)
+        result = node(base_state(document_id="abc123", retrieved_docs=["doc about cats"]))
+        assert "unable" in result["answer"]
+        cache.set.assert_not_called()
+
 
 class TestScoreNode:
     def test_relevant_and_sufficient_and_faithful_yields_none(self, fake_llm):

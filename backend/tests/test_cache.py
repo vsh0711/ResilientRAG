@@ -43,7 +43,7 @@ class TestSafeRedisCacheDegradesGracefully:
             store = {}
             mock_client = MagicMock()
             mock_client.ping.return_value = True
-            mock_client.setex.side_effect = lambda k, ttl, v: store.__setitem__(k, v)
+            mock_client.set.side_effect = lambda k, v, ex=None: store.__setitem__(k, v)
             mock_client.get.side_effect = lambda k: store.get(k)
             mock_from_url.return_value = mock_client
 

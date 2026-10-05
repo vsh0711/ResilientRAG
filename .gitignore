@@ -28,3 +28,10 @@ backend/uploads/
 # but don't let a contributor's local real run silently overwrite them
 # without review)
 eval/results/*_local.json
+
+# Frontend scratch
+frontend/tsconfig.tsbuildinfo
+frontend/public/_test/
+
+# Load-test output
+eval/results/load*

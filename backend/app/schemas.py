@@ -2,19 +2,47 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class ChunkingStrategyOut(BaseModel):
+    id: str
+    name: str
+    how: str
+    best_for: str
+    selected: bool
+
+
+class ChunkingResponse(BaseModel):
+    strategy_id: str
+    strategy_label: str
+    chunk_size: int
+    chunk_overlap: int
+    overlap_ratio: float
+    approx_tokens: int
+    separators_display: str
+    why: str
+    strategies: list[ChunkingStrategyOut]
 
 
 class UploadResponse(BaseModel):
     document_id: str
     num_chunks: int
     num_pages_estimate: int
+    indexed: bool = True
+    strategy_id: str = "recursive_character"
+    strategy_label: str = "Recursive character"
+    chunk_size: int = 500
+    chunk_overlap: int = 62
+    overlap_ratio: float = 0.125
+    avg_chunk_chars: int = 0
+    rationale: str = ""
 
 
 class QueryRequest(BaseModel):
     document_id: str
-    question: str
-    max_retries: int = 3
+    question: str = Field(min_length=1, max_length=2000)
+    max_retries: int = Field(default=3, ge=0, le=3)
 
 
 class HealingStepOut(BaseModel):
@@ -41,3 +69,4 @@ class QueryResponse(BaseModel):
     latency_ms: dict
     token_usage: dict
     cache_hits: dict
+    sources: list[str] = []

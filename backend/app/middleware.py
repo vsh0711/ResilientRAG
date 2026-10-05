@@ -8,6 +8,7 @@ had no equivalent of, since it had no concept of concurrent API clients.
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 from contextvars import ContextVar
@@ -21,6 +22,18 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 _request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
+
+
+_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{8,64}")
+
+
+def _client_ip(request: Request) -> str:
+    if get_settings().trust_proxy:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    return request.client.host if request.client else "unknown"
 
 
 class RequestIDLogFilter(logging.Filter):
@@ -59,14 +72,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     multiple backend replicas (not just per-process). Degrades to
     "allow everything" if Redis is unreachable — same fail-open philosophy
     as the answer cache, since a down cache/limiter shouldn't take the API
-    down with it. Scoped per client IP; swap the key for an API-key/user
-    ID once the project has real auth.
+    down with it. Scoped per browser session (X-Session-Id), with a higher per-IP
+    ceiling behind it. Swap in a real user ID once the project has auth.
     """
 
     def __init__(self, app, cache: SafeRedisCache | None = None):
         super().__init__(app)
         self._cache = cache or SafeRedisCache()
         self._limit = get_settings().rate_limit_per_minute
+        self._ip_limit = get_settings().ip_rate_limit_per_minute
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in ("/health", "/health/ready"):
@@ -75,16 +89,26 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not self._cache.available:
             return await call_next(request)
 
-        client_ip = request.client.host if request.client else "unknown"
         window = int(time.time() // 60)
-        key = f"ratelimit:{client_ip}:{window}"
+        client_ip = _client_ip(request)
+        session = request.headers.get("x-session-id", "")
 
-        count = self._cache.increment(key, ttl_seconds=60)
-        if count is not None and count > self._limit:
-            return Response(
-                content=f'{{"detail":"Rate limit exceeded: {self._limit} requests/minute"}}',
-                status_code=429,
-                media_type="application/json",
-                headers={"Retry-After": "60"},
-            )
+        # Two buckets. The per-session one is the fair limit between people.
+        # The per-IP one is a ceiling that only matters when someone rotates
+        # fake session IDs to dodge the first.
+        buckets = [(f"ratelimit:ip:{client_ip}:{window}", self._ip_limit)]
+        if _SESSION_ID.fullmatch(session):
+            buckets.append((f"ratelimit:s:{session}:{window}", self._limit))
+        else:
+            buckets = [(f"ratelimit:ip:{client_ip}:{window}", self._limit)]
+
+        for key, limit in buckets:
+            count = self._cache.increment(key, ttl_seconds=60)
+            if count is not None and count > limit:
+                return Response(
+                    content=f'{{"detail":"Rate limit exceeded: {limit} requests/minute"}}',
+                    status_code=429,
+                    media_type="application/json",
+                    headers={"Retry-After": "60"},
+                )
         return await call_next(request)

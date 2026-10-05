@@ -20,7 +20,8 @@ def test_health_check():
     assert response.json() == {"status": "ok"}
 
 
-def test_query_unknown_document_returns_404():
+def test_query_unknown_document_returns_404(monkeypatch):
+    monkeypatch.setattr(documents_router, "_chunks_from_qdrant", lambda _document_hash: None)
     client = TestClient(app)
     response = client.post("/query", json={"document_id": "nonexistent", "question": "hi"})
     assert response.status_code == 404

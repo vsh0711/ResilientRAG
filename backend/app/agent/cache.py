@@ -6,13 +6,11 @@ of the self-healing loop (see `retrieve_node` calling `embed_docs(text)`
 unconditionally). For a document with a few hundred chunks that's wasted
 CPU/GPU time on every retry iteration. This module gives two things:
 
-1. `DocumentEmbeddingCache` — keyed by a hash of the document content, so
-   a document is embedded once and reused across retries *and* across
-   requests (persisted in the vector store, not just this cache; this
-   cache only guards the point of "have we already embedded this exact
-   chunk list").
-2. `AnswerCache` — keyed by (document hash, normalized query), so a
-   repeated question against the same document skips the LLM entirely.
+1. Document chunk text is stored under `docchunks:{hash}` with no TTL so
+   any API replica can rebuild the agent state. Embeddings themselves
+   live in Qdrant, which is also the fallback if this key is missing.
+2. `AnswerCache` — keyed by (document hash, normalized query, retrieval
+   mode), so a repeated question against the same document skips the LLM.
 
 Both are no-ops (always miss) if Redis is unreachable or disabled, so the
 agent degrades gracefully rather than crashing when Redis isn't running.
@@ -76,7 +74,18 @@ class SafeRedisCache:
         if not self._client:
             return
         try:
-            self._client.setex(key, self._ttl, json.dumps(value))
+            self._client.set(key, json.dumps(value), ex=self._ttl)
+        except Exception as exc:
+            logger.warning("Redis SET failed for %s: %s", key, exc)
+
+    def set_persistent(self, key: str, value: Any) -> None:
+        """Store a value with no TTL. Used for document chunks, which must
+        outlive the one-hour answer cache. Redis can still drop the key
+        under a memory eviction policy; Qdrant remains the durable copy."""
+        if not self._client:
+            return
+        try:
+            self._client.set(key, json.dumps(value))
         except Exception as exc:
             logger.warning("Redis SET failed for %s: %s", key, exc)
 
