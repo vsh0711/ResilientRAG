@@ -162,21 +162,71 @@ What's actually exercised, not just covered:
 
 ## Measured results
 
-The full write-up, including what is **not** measured, is in [`eval/results/RESULTS.md`](eval/results/RESULTS.md). The end-to-end run is partial: some calls failed on Groq's free-tier rate limit, and it predates a later judge-outage fix.
+Every number below was measured on real PDFs, real embeddings and real Groq calls. Nothing is mocked or dry-run. Full write-up, including what is **not** measured: [`eval/results/RESULTS.md`](eval/results/RESULTS.md). Raw per-question output is in `eval/results/*.json`.
 
-Every number below was produced by running the code in this repo against real PDFs, real embeddings and real Groq calls. No mocked or dry-run figures are reported. Reproduce with `eval/make_bench.py` then `eval/run_bench.py`; raw per-question output is in `eval/results/*.json`.
+**Benchmark.** Four generated PDFs of different shape (numbered manual, continuous prose, topic-shifting field notes, Python source) with invented facts, so a model cannot answer from memory. 160 questions, each with an exact answer key; correct means the answer contains the key (string match, no LLM judge). Each question is asked in the document's wording and as a paraphrase. Intervals are 95% Wilson. Built by `eval/make_bench.py`, run by `eval/run_bench.py`.
 
-**Benchmark.** Four generated PDFs of different shape (a numbered manual, continuous prose, topic-shifting field notes, Python source). Facts are invented, so a model cannot answer from memory. Each question has an exact answer key, and correctness is a string match, not an LLM opinion. Each question is asked in the document's own wording and as a paraphrase. Intervals are 95% Wilson.
+### Retrieval precision (complete run)
 
-### Retrieval precision (top-3 contains the whole answer sentence)
+Metric: the top-3 retrieved chunks contain the whole answer sentence. All four documents, 320 queries per cell. Details: [`bench_chunking_sweep.md`](eval/results/bench_chunking_sweep.md).
 
-See [`eval/results/bench_chunking_sweep.md`](eval/results/bench_chunking_sweep.md). Headline: **chunk size mattered far more than chunking strategy.** Recursive splitting at 500 characters hit 100% (99–100%) with hybrid+rerank and 98% (95–99%) with dense only, against 89% (85–92%) and 80% (75–84%) at 1,600 characters. Semantic chunking beat recursive only at the old 1,600 size and did not beat it at 500. The default is therefore 500 characters, not the usual 300–500 *token* advice. Caveat: this benchmark is single-fact lookup; explanatory questions that need a wide passage may prefer larger chunks, which is what the healing loop's growing retrieval budget is for.
+| chunking | dense | hybrid + rerank |
+|---|---|---|
+| recursive, 500 chars | 98% (95–99) | 100% (99–100) |
+| semantic, 500 chars | 92% (88–94) | 98% (95–99) |
+| fixed, 500 chars | 88% (84–91) | 98% (95–99) |
+| recursive, 900 chars | 91% (87–93) | 100% (98–100) |
+| recursive, 1,600 chars (old default) | 80% (75–84) | 89% (85–92) |
+| semantic, 1,600 chars | 81% (76–85) | 95% (92–97) |
 
-### End-to-end accuracy, latency, healing
+- **Chunk size mattered more than strategy.** 1,600 → 500 characters raised recursive splitting by 11 points (hybrid) and 18 points (dense). The default is now 500 characters.
+- **Semantic chunking did not beat plain recursive splitting at 500 characters.** It only looked good against the 1,600 default.
+- **Caveat:** this is single-fact lookup. Questions needing a wide passage may prefer larger chunks, which is what the healing loop's growing retrieval budget is for.
+- The sweep's `auto` column used the old default and the earlier, miscalibrated strategy picker. The picker was recalibrated afterwards and has not been re-benchmarked.
 
-See [`eval/results/bench_e2e_run1.md`](eval/results/bench_e2e_run1.md): baseline (tutorial setup: 1,600-char chunks, dense search, no healing), the agent without healing, and the full agent, 8 questions × 4 documents × 2 wordings. It includes accuracy with intervals, p50/p95 latency, token cost, a paired fixed-vs-broken count, and full healing traces for answers that started wrong.
+### End-to-end accuracy, latency and healing (partial run)
 
-Honest limits of that run: Groq's rate limits made some calls fail upstream; those are counted separately and excluded from accuracy, never scored as correct. Latency in that run is dominated by rate-limit backoff, so treat it as a ceiling for a free-tier key, not a property of the code.
+File: [`bench_e2e_run1.md`](eval/results/bench_e2e_run1.md). 8 questions × 4 documents × 2 wordings × 3 arms = 192 runs. 27 failed upstream on Groq rate limits and are excluded, never counted as correct, so arms have different n.
+
+| arm | answered | correct | median latency | p95 latency | mean tokens |
+|---|---|---|---|---|---|
+| baseline (1,600-char chunks, dense, no healing) | 53 | 83% (71–91) | 40.8 s | 105 s | 2,987 |
+| agent, no healing | 62 | 87% (77–93) | 16.5 s | 67 s | 1,480 |
+| agent, full healing loop | 50 | 96% (87–99) | 29.9 s | 104 s | 2,663 |
+
+- Paired on the 48 questions answered by both baseline and full agent: the agent fixed 6, broke 2, tied 40.
+- Of 15 questions where the loop actually retried, 13 (87%) ended correct.
+- The intervals overlap, so 96% vs 83% is suggestive, not proven at this sample size.
+- Latency is dominated by rate-limit backoff on a free key. Treat it as a ceiling, not what the code costs on a paid tier.
+
+### Healing trace: how a poor answer improves
+
+Real trace from that run. Question: *"Which person was in charge of the Priprimir initiative at Northfield?"* (answer key: `Leona Castellan`).
+
+| attempt | search | answer | correct |
+|---|---|---|---|
+| 1 | dense, k=3 | I didn't find any relevant documents. | no |
+| 2 | dense + rerank, k=5 | I didn't find any relevant documents. | no |
+| 3 | hybrid, k=7 | Leona Castellan led the Priprimir initiative. | yes |
+| 4 | hybrid + rerank, k=9 | Leona Castellan. | yes |
+
+Retry 1 escalated dense → dense+rerank and widened the budget. Retry 2 escalated to hybrid and rewrote the query to *"Who headed the Priprimir initiative at Northfield?"*. Retry 3 escalated to hybrid+rerank. Two more traces are in the report. The 0.00 judge scores in the raw trace come from the judge-outage defect below.
+
+### Defects the benchmark found
+
+- **Retired models.** The repo's default Groq models no longer exist for this key; every answer and judge call would have failed. Replaced, and `/health/ready` now reports missing models.
+- **Judge outage treated as a bad answer.** A rate-limited judge scored correct answers 0.00 and the loop escalated retrieval for nothing. Now ends with `failure_reason=judge_unavailable` and returns the answer unverified. Unit-tested, but the benchmark has not been re-run with the fix, so the 96% above includes those wasted retries.
+
+### What limits real use: the Groq free tier
+
+Read from response headers on this key: **8,000 tokens per minute and 1,000 requests per day, per model.** One question costs about 1,500–4,000 tokens, so this key sustains roughly 2–5 questions per minute in total. That is the real ceiling for a 100-user deployment. It is a provider quota, not a property of the code, and it needs a paid Groq tier before 100 people use this. The client now honours `Retry-After` and backs off longer, but that only smooths bursts.
+
+### Not measured
+
+- Refusal rate on unanswerable questions (`run_bench.py unanswerable` exists, never run).
+- The 100-user load test (`loadtest/locustfile.py` exists, never run; the quota above makes it uninformative on this key).
+- End-to-end accuracy after the judge fix, Retry-After backoff, the 500-character default and the recalibrated picker.
+- Statistical significance of the agent vs baseline gap.
 
 ### Reproduce
 
@@ -184,7 +234,7 @@ Honest limits of that run: Groq's rate limits made some calls fail upstream; tho
 cd backend
 uv run --extra dev python ../eval/make_bench.py
 uv run --extra dev python ../eval/run_bench.py chunking --tag sweep --configs recursive_character@500 recursive_character semantic auto
-uv run --extra dev python ../eval/run_bench.py e2e --per-doc 8 --workers 2
+uv run --extra dev python ../eval/run_bench.py e2e --per-doc 8 --workers 1
 ```
 
 ## Trade-offs and things deliberately left out
