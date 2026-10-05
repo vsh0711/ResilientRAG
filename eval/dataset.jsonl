@@ -1,0 +1,20 @@
+{"id": "q01", "question": "What is Retrieval-Augmented Generation?", "relevant_chunk_indices": [0], "answer_keywords": ["retrieval", "language model", "external"], "difficulty": "easy"}
+{"id": "q02", "question": "How are documents and queries turned into vectors for dense retrieval?", "relevant_chunk_indices": [1], "answer_keywords": ["embedding", "sentence transformer", "cosine"], "difficulty": "easy"}
+{"id": "q03", "question": "What is BM25 and when does it outperform dense embeddings?", "relevant_chunk_indices": [2], "answer_keywords": ["term frequency", "keyword", "sparse"], "difficulty": "easy"}
+{"id": "q04", "question": "Explain Reciprocal Rank Fusion.", "relevant_chunk_indices": [3], "answer_keywords": ["rank", "fusion", "sum"], "difficulty": "easy"}
+{"id": "q05", "question": "What is the difference between a cross-encoder and a bi-encoder?", "relevant_chunk_indices": [4], "answer_keywords": ["cross-encoder", "bi-encoder", "together"], "difficulty": "easy"}
+{"id": "q06", "question": "Why do people retrieve more documents than needed before reranking?", "relevant_chunk_indices": [5], "answer_keywords": ["candidate", "rerank", "latency"], "difficulty": "medium"}
+{"id": "q07", "question": "What is chunking and why does chunk overlap matter?", "relevant_chunk_indices": [6], "answer_keywords": ["split", "overlap", "boundary"], "difficulty": "easy"}
+{"id": "q08", "question": "What does LLM-as-a-judge mean?", "relevant_chunk_indices": [7], "answer_keywords": ["judge", "evaluate", "model"], "difficulty": "easy"}
+{"id": "q09", "question": "What is a hallucination in the context of grounded answers?", "relevant_chunk_indices": [8], "answer_keywords": ["unsupported", "claim", "context"], "difficulty": "easy"}
+{"id": "q10", "question": "Why should relevance and faithfulness be scored separately?", "relevant_chunk_indices": [9], "answer_keywords": ["diagnose", "relevance", "faithfulness"], "difficulty": "medium"}
+{"id": "q11", "question": "What does a self-healing RAG system do differently from a normal one?", "relevant_chunk_indices": [10], "answer_keywords": ["detects", "adjusts", "retry"], "difficulty": "easy"}
+{"id": "q12", "question": "When is rewriting the user's question more useful than just fetching more documents?", "relevant_chunk_indices": [11], "answer_keywords": ["missing context", "rewrite", "vocabulary"], "difficulty": "medium"}
+{"id": "q13", "question": "What are the two layers of caching described for a RAG pipeline?", "relevant_chunk_indices": [12], "answer_keywords": ["embedding cache", "answer cache"], "difficulty": "easy"}
+{"id": "q14", "question": "How should a system respond when an LLM API call is rate-limited?", "relevant_chunk_indices": [13], "answer_keywords": ["backoff", "fallback", "retry"], "difficulty": "easy"}
+{"id": "q15", "question": "Define precision at k and recall at k.", "relevant_chunk_indices": [14], "answer_keywords": ["precision", "recall", "relevant"], "difficulty": "easy"}
+{"id": "q16", "question": "What problem does Docker Compose solve for a multi-service app?", "relevant_chunk_indices": [15], "answer_keywords": ["services", "reproducible", "single command"], "difficulty": "easy"}
+{"id": "q17", "question": "My app returned relevant passages but the answer still contained made-up facts -- what failed?", "relevant_chunk_indices": [8, 9], "answer_keywords": ["faithfulness", "generation", "hallucination"], "difficulty": "hard"}
+{"id": "q18", "question": "What's a good way to avoid paying for the same LLM call twice when a user asks the same thing again?", "relevant_chunk_indices": [12], "answer_keywords": ["cache", "repeated"], "difficulty": "hard"}
+{"id": "q19", "question": "I want fewer missed results without giving up exact term matching -- what retrieval setup should I use?", "relevant_chunk_indices": [3, 2, 1], "answer_keywords": ["hybrid", "dense", "sparse"], "difficulty": "hard"}
+{"id": "q20", "question": "How can a RAG agent recover on its own instead of just failing when retrieval quality is poor?", "relevant_chunk_indices": [10, 11], "answer_keywords": ["self-healing", "strategy", "retry"], "difficulty": "hard"}

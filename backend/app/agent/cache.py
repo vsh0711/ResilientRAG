@@ -1,0 +1,100 @@
+"""
+Redis-backed cache for embeddings and generated answers.
+
+The original repo re-embeds the *entire document* on every single retry
+of the self-healing loop (see `retrieve_node` calling `embed_docs(text)`
+unconditionally). For a document with a few hundred chunks that's wasted
+CPU/GPU time on every retry iteration. This module gives two things:
+
+1. `DocumentEmbeddingCache` — keyed by a hash of the document content, so
+   a document is embedded once and reused across retries *and* across
+   requests (persisted in the vector store, not just this cache; this
+   cache only guards the point of "have we already embedded this exact
+   chunk list").
+2. `AnswerCache` — keyed by (document hash, normalized query), so a
+   repeated question against the same document skips the LLM entirely.
+
+Both are no-ops (always miss) if Redis is unreachable or disabled, so the
+agent degrades gracefully rather than crashing when Redis isn't running.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+from typing import Any, Optional
+
+import redis
+
+from app.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+
+def hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def hash_chunks(chunks: list[str]) -> str:
+    joined = "\u0001".join(chunks)
+    return hash_text(joined)
+
+
+class SafeRedisCache:
+    """Wraps redis so any connection failure degrades to a cache miss."""
+
+    def __init__(self, redis_url: Optional[str] = None):
+        settings = get_settings()
+        self._enabled = settings.cache_enabled
+        self._ttl = settings.cache_ttl_seconds
+        self._client: Optional[redis.Redis] = None
+        if self._enabled:
+            try:
+                self._client = redis.from_url(
+                    redis_url or settings.redis_url, socket_connect_timeout=1.0
+                )
+                self._client.ping()
+            except Exception as exc:
+                logger.warning("Redis unavailable, caching disabled: %s", exc)
+                self._client = None
+
+    @property
+    def available(self) -> bool:
+        return self._client is not None
+
+    def get_json(self, key: str) -> Optional[Any]:
+        if not self._client:
+            return None
+        try:
+            raw = self._client.get(key)
+            return json.loads(raw) if raw else None
+        except Exception as exc:
+            logger.warning("Redis GET failed for %s: %s", key, exc)
+            return None
+
+    def set_json(self, key: str, value: Any) -> None:
+        if not self._client:
+            return
+        try:
+            self._client.setex(key, self._ttl, json.dumps(value))
+        except Exception as exc:
+            logger.warning("Redis SET failed for %s: %s", key, exc)
+
+
+class AnswerCache:
+    def __init__(self, cache: Optional[SafeRedisCache] = None):
+        self._cache = cache or SafeRedisCache()
+
+    def _key(self, document_hash: str, query: str, retrieval_mode: str) -> str:
+        normalized = query.strip().lower()
+        return f"answer:{document_hash}:{retrieval_mode}:{hash_text(normalized)}"
+
+    def get(self, document_hash: str, query: str, retrieval_mode: str) -> Optional[dict]:
+        return self._cache.get_json(self._key(document_hash, query, retrieval_mode))
+
+    def set(self, document_hash: str, query: str, retrieval_mode: str, payload: dict) -> None:
+        self._cache.set_json(self._key(document_hash, query, retrieval_mode), payload)
+
+    @property
+    def available(self) -> bool:
+        return self._cache.available
