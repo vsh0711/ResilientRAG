@@ -80,6 +80,23 @@ class SafeRedisCache:
         except Exception as exc:
             logger.warning("Redis SET failed for %s: %s", key, exc)
 
+    def increment(self, key: str, ttl_seconds: int) -> Optional[int]:
+        """Atomically increments a counter, setting its expiry only the
+        first time it's created (so a fixed window actually expires on
+        schedule rather than having its TTL pushed back on every hit).
+        Returns None (never limits) if Redis is unavailable."""
+        if not self._client:
+            return None
+        try:
+            pipe = self._client.pipeline()
+            pipe.incr(key)
+            pipe.expire(key, ttl_seconds, nx=True)
+            count, _ = pipe.execute()
+            return int(count)
+        except Exception as exc:
+            logger.warning("Redis INCR failed for %s: %s", key, exc)
+            return None
+
 
 class AnswerCache:
     def __init__(self, cache: Optional[SafeRedisCache] = None):

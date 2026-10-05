@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     # --- API ---
     api_cors_origins: list[str] = ["http://localhost:3000"]
     upload_dir: str = "/tmp/resilientrag_uploads"
+    max_upload_size_mb: int = 20
+    rate_limit_per_minute: int = 30
 
 
 @lru_cache

@@ -18,6 +18,7 @@ from typing import Any
 from app.agent.cache import AnswerCache, hash_chunks
 from app.agent.judges import LLMCallError, judge_faithfulness, judge_relevance
 from app.agent.llm import ResilientLLMClient
+from app.exceptions import RetrievalBackendError
 from app.agent.query_rewrite import rewrite_query
 from app.agent.retrieval import retrieve
 from app.agent.state import FailureReason, HealingStep, RAGState, RetrievalMode
@@ -78,16 +79,26 @@ def make_retrieve_node(store: VectorStore):
         t0 = time.perf_counter()
         document_hash = hash_chunks(state["chunks"])
 
-        if not store.is_indexed(document_hash):
-            store.index_chunks(document_hash, state["chunks"])
+        try:
+            if not store.is_indexed(document_hash):
+                store.index_chunks(document_hash, state["chunks"])
 
-        results = retrieve(
-            store,
-            document_hash=document_hash,
-            query=state["query"],
-            k=state["retrieval_budget"],
-            mode=state["retrieval_mode"],
-        )
+            results = retrieve(
+                store,
+                document_hash=document_hash,
+                query=state["query"],
+                k=state["retrieval_budget"],
+                mode=state["retrieval_mode"],
+            )
+        except Exception as exc:
+            # Anything here (Qdrant unreachable, embedding model can't be
+            # loaded/downloaded, etc.) is an infrastructure failure, not a
+            # bad request. Surface it as a typed, specific error instead
+            # of letting an arbitrary low-level exception propagate up
+            # through LangGraph with its raw stack trace.
+            raise RetrievalBackendError(
+                f"Retrieval backend failed during '{state['retrieval_mode']}' search: {exc}"
+            ) from exc
 
         latency_ms = (time.perf_counter() - t0) * 1000
         return {

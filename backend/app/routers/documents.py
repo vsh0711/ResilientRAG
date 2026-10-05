@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.agent.document_loader import load_document
 from app.config import get_settings
+from app.exceptions import PayloadTooLargeError
 from app.schemas import UploadResponse
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -39,11 +39,19 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
     settings = get_settings()
+    max_bytes = settings.max_upload_size_mb * 1024 * 1024
     os.makedirs(settings.upload_dir, exist_ok=True)
     temp_path = os.path.join(settings.upload_dir, f"_upload_{file.filename}")
     try:
+        written = 0
         with open(temp_path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
+            while chunk := await file.read(1024 * 1024):
+                written += len(chunk)
+                if written > max_bytes:
+                    raise PayloadTooLargeError(
+                        f"File exceeds the {settings.max_upload_size_mb}MB upload limit."
+                    )
+                f.write(chunk)
 
         loaded = load_document(temp_path)
         save_chunks(loaded.document_hash, loaded.chunks)
