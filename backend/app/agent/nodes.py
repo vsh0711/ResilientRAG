@@ -171,15 +171,15 @@ def make_score_node(llm: ResilientLLMClient):
                 llm, state["query"], state["retrieved_docs"], state["answer"]
             )
         except LLMCallError:
-            # Judge itself failed — fail safe by assuming the worst, so the
-            # loop either retries (if budget remains) or ends without
-            # pretending the answer was validated.
+            # The judge could not run (rate limit, outage). That says nothing
+            # about the answer, so retrieval must not be escalated. Report
+            # score 0 so nothing claims the answer was validated, and stop.
             latency_ms = (time.perf_counter() - t0) * 1000
             return {
                 "relevance_score": 0.0,
                 "faithfulness_score": 0.0,
                 "score": 0.0,
-                "failure_reason": FailureReason.IRRELEVANT_DOCS.value,
+                "failure_reason": FailureReason.JUDGE_UNAVAILABLE.value,
                 "latency_ms": _record_latency(state, "score", latency_ms),
             }
 
@@ -213,6 +213,8 @@ def make_score_node(llm: ResilientLLMClient):
 
 def should_retry(state: RAGState) -> str:
     settings = get_settings()
+    if state.get("failure_reason") == FailureReason.JUDGE_UNAVAILABLE.value:
+        return "end"
     if state["score"] < settings.score_pass_threshold and state["retry_count"] < state["max_retries"]:
         return "retry"
     return "end"

@@ -27,6 +27,7 @@ class FailureReason(str, Enum):
     IRRELEVANT_DOCS = "irrelevant_docs"
     MISSING_CONTEXT = "missing_context"
     UNFAITHFUL = "unfaithful_answer"
+    JUDGE_UNAVAILABLE = "judge_unavailable"
     NONE = "none"
 
 

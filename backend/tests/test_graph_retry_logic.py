@@ -107,3 +107,24 @@ class TestFullGraphFlow:
         graph.invoke(state)
 
         assert fake_store.index_calls == 1
+
+
+class TestJudgeOutage:
+    def test_a_judge_that_cannot_run_does_not_trigger_healing(self, fake_store, fake_llm):
+        """Found in the real benchmark: a rate-limited judge returned 0.00 for
+        correct answers and the loop escalated retrieval for nothing."""
+        from app.agent.llm import LLMCallError
+
+        def judge_down(**_kwargs):
+            raise LLMCallError(message="rate limited", attempts=4)
+
+        fake_llm.chat_json = judge_down
+        graph = _build_fake_graph(fake_store, fake_llm)
+        result = graph.invoke(initial_state(chunks=["cats are great"], query="cats"))
+
+        assert result["failure_reason"] == "judge_unavailable"
+        assert result["retry_count"] == 0
+        assert result["healing_trace"] == []
+        assert result["score"] == 0.0  # never claims the answer was validated
+        assert result["answer"] == fake_llm.answer  # the answer is still returned
+        assert len(fake_store.search_calls) == 1
