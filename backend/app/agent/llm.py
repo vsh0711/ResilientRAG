@@ -53,6 +53,15 @@ class LLMCallError(Exception):
         return self.message
 
 
+def _retry_after_seconds(exc: Exception) -> Optional[float]:
+    """Seconds the provider asked us to wait, if it said."""
+    try:
+        value = exc.response.headers.get("retry-after")  # type: ignore[attr-defined]
+        return float(value) if value is not None else None
+    except Exception:
+        return None
+
+
 class ResilientLLMClient:
     """Thin wrapper around the Groq SDK with retry/backoff/fallback."""
 
@@ -166,6 +175,11 @@ class ResilientLLMClient:
                     )
                     if attempt < max_attempts:
                         backoff = self._settings.llm_backoff_base_seconds * (2 ** (attempt - 1))
+                        # A 429 from Groq says exactly how long until the token
+                        # bucket refills. Waiting that long beats guessing.
+                        retry_after = _retry_after_seconds(exc)
+                        if retry_after is not None:
+                            backoff = max(backoff, min(retry_after, 30.0))
                         time.sleep(backoff)
                 except Exception as exc:  # non-retryable
                     last_exc = exc

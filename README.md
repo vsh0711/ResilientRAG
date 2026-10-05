@@ -162,6 +162,8 @@ What's actually exercised, not just covered:
 
 ## Measured results
 
+The full write-up, including what is **not** measured, is in [`eval/results/RESULTS.md`](eval/results/RESULTS.md). The end-to-end run is partial: some calls failed on Groq's free-tier rate limit, and it predates a later judge-outage fix.
+
 Every number below was produced by running the code in this repo against real PDFs, real embeddings and real Groq calls. No mocked or dry-run figures are reported. Reproduce with `eval/make_bench.py` then `eval/run_bench.py`; raw per-question output is in `eval/results/*.json`.
 
 **Benchmark.** Four generated PDFs of different shape (a numbered manual, continuous prose, topic-shifting field notes, Python source). Facts are invented, so a model cannot answer from memory. Each question has an exact answer key, and correctness is a string match, not an LLM opinion. Each question is asked in the document's own wording and as a paraphrase. Intervals are 95% Wilson.
@@ -172,7 +174,7 @@ See [`eval/results/bench_chunking_sweep.md`](eval/results/bench_chunking_sweep.m
 
 ### End-to-end accuracy, latency, healing
 
-See [`eval/results/bench_e2e.md`](eval/results/bench_e2e.md): baseline (tutorial setup: 1,600-char chunks, dense search, no healing), the agent without healing, and the full agent, 8 questions × 4 documents × 2 wordings. It includes accuracy with intervals, p50/p95 latency, token cost, a paired fixed-vs-broken count, and full healing traces for answers that started wrong.
+See [`eval/results/bench_e2e_run1.md`](eval/results/bench_e2e_run1.md): baseline (tutorial setup: 1,600-char chunks, dense search, no healing), the agent without healing, and the full agent, 8 questions × 4 documents × 2 wordings. It includes accuracy with intervals, p50/p95 latency, token cost, a paired fixed-vs-broken count, and full healing traces for answers that started wrong.
 
 Honest limits of that run: Groq's rate limits made some calls fail upstream; those are counted separately and excluded from accuracy, never scored as correct. Latency in that run is dominated by rate-limit backoff, so treat it as a ceiling for a free-tier key, not a property of the code.
 

@@ -32,8 +32,8 @@ class Settings(BaseSettings):
     groq_primary_model: str = "openai/gpt-oss-120b"
     groq_fallback_model: str = "openai/gpt-oss-20b"
     groq_judge_model: str = "qwen/qwen3.8-27b"
-    llm_max_retries: int = 3
-    llm_backoff_base_seconds: float = 1.0
+    llm_max_retries: int = 5
+    llm_backoff_base_seconds: float = 2.0
     llm_timeout_seconds: float = 30.0
 
     # --- Embeddings (local, free, no API key required) ---

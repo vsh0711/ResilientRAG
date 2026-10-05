@@ -17,6 +17,7 @@ const REASON_LABEL: Record<string, string> = {
   irrelevant_docs: "the retrieved passages were about something else",
   missing_context: "the passages were on topic but incomplete",
   unfaithful_answer: "the answer claimed more than the passages support",
+  judge_unavailable: "the judge could not run (rate limit or outage), so this answer is unverified",
   none: "all good",
 };
 
