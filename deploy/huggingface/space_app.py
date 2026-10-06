@@ -18,6 +18,18 @@ for key, value in {
 }.items():
     os.environ.setdefault(key, value)
 
+# ZeroGPU Spaces refuse to start unless some function is marked @spaces.GPU.
+# This app never uses a GPU; the no-op below only satisfies that startup check.
+# On CPU hardware the `spaces` package is absent and this is skipped.
+try:
+    import spaces  # type: ignore[import-not-found]
+
+    @spaces.GPU
+    def _satisfy_zerogpu_check() -> None:
+        return None
+except ImportError:
+    pass
+
 import uvicorn  # noqa: E402
 
 from app.main import app  # noqa: E402
