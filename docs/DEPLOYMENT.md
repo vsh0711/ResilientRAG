@@ -13,17 +13,19 @@ Vercel runs only the Next.js frontend. The backend needs a long-running process 
 
 ## A. Free demo
 
-### A1. Backend on a Hugging Face Space
+### A1. Backend on a Hugging Face Space (no Docker)
 
-1. Create an account at huggingface.co and a **new Space**: SDK **Docker**, hardware **CPU basic (free)**, visibility your choice.
+Use the **Gradio SDK**, not the Docker SDK. Docker Spaces are not available on every free account; the Gradio SDK is, and it can run any Python app. The bundle's `space_app.py` starts the FastAPI app directly and never imports Gradio.
+
+1. Create an account at huggingface.co and a **new Space**: SDK **Gradio**, hardware **CPU basic (free)**.
 2. Build the bundle and push it to the Space:
    ```bash
-   ./deploy/huggingface/build_space.sh
+   ./deploy/huggingface/build_space.sh          # writes dist/space (add "docker" for the Docker SDK variant)
    cd dist/space
    git init -b main
    git remote add space https://huggingface.co/spaces/<you>/<space-name>
    git add . && git commit -m "deploy"
-   git push space main --force        # use a HF access token (write) as the password
+   git push space main --force                  # username + a HF access token (write) as the password
    ```
 3. In the Space → **Settings → Variables and secrets**, add:
 
@@ -36,10 +38,23 @@ Vercel runs only the Next.js frontend. The backend needs a long-running process 
    | `GROQ_FALLBACK_MODEL` | variable | `openai/gpt-oss-20b` |
    | `GROQ_JUDGE_MODEL` | variable | `qwen/qwen3.8-27b` |
 
-4. Wait for the build (models are downloaded at build time, ~5 min). Check
+4. The first start installs packages and downloads three embedding models (a few minutes). Then check
    `https://<you>-<space-name>.hf.space/health/ready`; expect `"status":"ok"`.
 
-Free Spaces sleep after inactivity and lose their memory when they restart, so uploaded documents disappear. For persistence point `QDRANT_URL` + `QDRANT_API_KEY` at a free Qdrant Cloud cluster and set `QDRANT_USE_MEMORY=false` (Redis stays optional).
+How this was verified: the bundle's `requirements.txt` plus the pinned `gradio==4.44.1` were installed into a fresh Python 3.11 virtualenv and `space_app.py` was run exactly as the Space runs it; a real upload and question succeeded. The Space itself was not deployed from this environment (no Hugging Face login), so expect to read the build log once.
+
+Free Spaces sleep after inactivity and lose their memory when they restart, so uploaded documents disappear. For persistence, point `QDRANT_URL` + `QDRANT_API_KEY` at a free Qdrant Cloud cluster and set `QDRANT_USE_MEMORY=false`.
+
+**If you have no Hugging Face access at all**, run the backend on your own machine and expose it over a free tunnel:
+
+```bash
+cd backend && uv sync && QDRANT_USE_MEMORY=true CACHE_ENABLED=false \
+  ACCESS_CODES=<code> API_CORS_ORIGINS=https://<your-app>.vercel.app \
+  uv run uvicorn app.main:app --port 8000
+cloudflared tunnel --url http://localhost:8000     # prints a https://….trycloudflare.com URL
+```
+
+Use that URL as `NEXT_PUBLIC_API_URL`. It works only while your machine is on, and the URL changes each time the tunnel restarts.
 
 ### A2. Frontend on Vercel
 

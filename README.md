@@ -68,7 +68,7 @@ Open <http://localhost:3000>, drop a PDF, ask a question. Without Docker: see [d
 
 | | what | guide |
 |---|---|---|
-| **Free demo** | frontend on **Vercel**, backend on a **Hugging Face Space** (Docker, 16 GB free) | [docs/DEPLOYMENT.md §A](docs/DEPLOYMENT.md) |
+| **Free demo** | frontend on **Vercel**, backend on a **Hugging Face Space** (Gradio SDK, no Docker needed, 16 GB free) | [docs/DEPLOYMENT.md §A](docs/DEPLOYMENT.md) |
 | **Server** | Docker Compose + Caddy (automatic HTTPS, access codes), Qdrant and Redis in volumes | [docs/DEPLOYMENT.md §B](docs/DEPLOYMENT.md) |
 
 Vercel hosts only the frontend: the backend needs a long-running process and about 1 GB for three embedding models. The free demo keeps vectors in memory, so documents vanish on restart. A free Groq key allows roughly 50–130 questions a day, so keep access codes on for anything public.

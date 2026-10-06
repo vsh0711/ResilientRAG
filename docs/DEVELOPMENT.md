@@ -20,7 +20,7 @@ backend/tests/       135 tests, offline: fake LLM and store, Qdrant in memory
 frontend/app/        Next.js UI (see ARCHITECTURE.md §7)
 eval/                benchmark generator, runners, results
 loadtest/            Locust scenario
-deploy/huggingface/  Space image and bundle script
+deploy/huggingface/  Space bundle script, space_app.py (no-Docker entry point), optional Dockerfile
 docs/                this folder
 ```
 

@@ -10,7 +10,7 @@ Rebuild of [gurezende/SelfHealingRAG](https://github.com/gurezende/SelfHealingRA
 - `/documents/stream` and `/query/stream` (server-sent events).
 - Split relevance/faithfulness judges; four-tier retrieval ladder with hybrid search; query rewriting.
 - Access codes, per-session rate limits, in-process limiter when Redis is absent.
-- Docker production overlay with Caddy HTTPS; free-demo packaging for Vercel + Hugging Face Spaces.
+- Docker production overlay with Caddy HTTPS; free-demo packaging for Vercel + a Hugging Face Gradio-SDK Space (no Docker).
 - Real-PDF benchmark (`eval/`), load-test scenario (`loadtest/`), and `docs/`.
 
 ### Changed

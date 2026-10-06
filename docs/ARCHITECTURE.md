@@ -32,7 +32,7 @@ Two deployment shapes share one codebase:
 | | Docker / VPS | Free demo |
 |---|---|---|
 | Frontend | Next.js container, same-origin `/api/proxy` | Vercel, calls the API directly (`NEXT_PUBLIC_API_URL`) |
-| Backend | 2 uvicorn workers | 1 worker on a Hugging Face Space |
+| Backend | 2 uvicorn workers | 1 worker on a Hugging Face Space (Gradio SDK, no Docker) |
 | Vectors | Qdrant server | in-process (`QDRANT_USE_MEMORY`), lost on restart |
 | Redis | yes | none; an in-process limiter replaces it |
 | TLS / auth | Caddy + access codes | platform TLS + access codes |
