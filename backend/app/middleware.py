@@ -67,6 +67,28 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class LocalCounter:
+    """Per-process fixed-window counter, used only when Redis is unavailable.
+
+    Correct for one worker, which is what a Redis-less deployment runs. With
+    several workers each would count separately, so the limit is a multiple of
+    the configured value; that is why production uses Redis.
+    """
+
+    def __init__(self) -> None:
+        self._counts: dict[str, tuple[float, int]] = {}
+
+    def increment(self, key: str, ttl_seconds: int) -> int:
+        now = time.monotonic()
+        if len(self._counts) > 10_000:  # bound memory under key spraying
+            self._counts = {k: v for k, v in self._counts.items() if v[0] > now}
+        expires, count = self._counts.get(key, (0.0, 0))
+        if expires <= now:
+            expires, count = now + ttl_seconds, 0
+        self._counts[key] = (expires, count + 1)
+        return count + 1
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """
     Fixed-window rate limiting, counted in Redis so it's correct across
@@ -80,14 +102,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, cache: SafeRedisCache | None = None):
         super().__init__(app)
         self._cache = cache or SafeRedisCache()
+        self._local = LocalCounter()
         self._limit = get_settings().rate_limit_per_minute
         self._ip_limit = get_settings().ip_rate_limit_per_minute
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in ("/health", "/health/ready"):
-            return await call_next(request)
-
-        if not self._cache.available:
             return await call_next(request)
 
         window = int(time.time() // 60)
@@ -104,7 +124,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             buckets = [(f"ratelimit:ip:{client_ip}:{window}", self._limit)]
 
         for key, limit in buckets:
-            count = self._cache.increment(key, ttl_seconds=60)
+            counter = self._cache if self._cache.available else self._local
+            count = counter.increment(key, ttl_seconds=60)
             if count is not None and count > limit:
                 return Response(
                     content=f'{{"detail":"Rate limit exceeded: {limit} requests/minute"}}',

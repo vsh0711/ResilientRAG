@@ -61,8 +61,16 @@ export interface QueryResponse {
   sources: string[];
 }
 
+/**
+ * With NEXT_PUBLIC_API_URL set (the Vercel deployment) the browser talks to the
+ * API directly. Vercel functions cap request bodies at 4.5 MB and run for 60 s
+ * at most on the free plan, which would break PDF uploads and long answers if
+ * they went through the proxy. Without it, requests use the same-origin proxy.
+ */
+const DIRECT = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+
 function endpoint(path: string): string {
-  return `/api/proxy${path}`;
+  return DIRECT ? `${DIRECT}${path}` : `/api/proxy${path}`;
 }
 
 /** One random ID per browser. The API rate-limits per session, not per office IP. */

@@ -35,3 +35,6 @@ frontend/public/_test/
 
 # Load-test HTML report (the stats CSV is committed)
 eval/results/*.html
+
+# Built deployment bundles
+dist/

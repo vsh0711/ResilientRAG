@@ -45,8 +45,11 @@ class Settings(BaseSettings):
 
     # --- Vector store ---
     qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str = ""  # for Qdrant Cloud
     qdrant_collection: str = "resilientrag_chunks"
-    qdrant_use_memory: bool = False  # True for tests/local dev w/o Docker
+    # True keeps vectors in this process: no Qdrant server, lost on restart, and only
+    # correct with a single worker. Fine for a free demo, wrong for production.
+    qdrant_use_memory: bool = False
 
     # --- Cache ---
     redis_url: str = "redis://localhost:6379/0"
@@ -60,7 +63,6 @@ class Settings(BaseSettings):
     budget_increment_missing_context: int = 3
     budget_increment_irrelevant_docs: int = 2
     retry_count_trigger_query_rewrite: int = 1  # rewrite query starting this retry #
-    retry_count_trigger_hybrid: int = 2         # escalate to hybrid retrieval starting this retry #
 
     # --- Chunking ---
     # Measured, not assumed: on the factoid benchmark in eval/ (real PDFs,

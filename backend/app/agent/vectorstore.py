@@ -75,6 +75,18 @@ def reciprocal_rank_fusion(
     return [doc for doc, _ in sorted(scores.items(), key=lambda kv: kv[1], reverse=True)]
 
 
+_MEMORY_CLIENT: Optional[QdrantClient] = None
+
+
+def _shared_memory_client() -> QdrantClient:
+    """One in-process Qdrant for the whole app. A fresh ':memory:' client per
+    VectorStore() would forget every document between requests."""
+    global _MEMORY_CLIENT
+    if _MEMORY_CLIENT is None:
+        _MEMORY_CLIENT = QdrantClient(":memory:")
+    return _MEMORY_CLIENT
+
+
 class VectorStore:
     def __init__(self, client: Optional[QdrantClient] = None):
         settings = get_settings()
@@ -82,10 +94,11 @@ class VectorStore:
         if client is not None:
             self._client = client
         elif settings.qdrant_use_memory:
-            self._client = QdrantClient(":memory:")
+            self._client = _shared_memory_client()
         else:
             self._client = QdrantClient(
                 url=settings.qdrant_url,
+                api_key=settings.qdrant_api_key or None,
                 timeout=settings.qdrant_timeout_seconds,
             )
 

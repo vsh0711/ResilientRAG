@@ -1,7 +1,7 @@
 const TARGET = process.env.API_PROXY_TARGET || "http://localhost:8000";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 60; // the longest a free Vercel function may run
 
 type RouteContext = { params: Promise<{ path: string[] }> };
 
