@@ -2,6 +2,10 @@
 
 A RAG agent that **explains how it reads your file** and **heals its own bad answers**.
 
+**Live demo: https://resilient-rag.vercel.app**
+
+(Free-tier demo: the backend is a Hugging Face Space that sleeps when idle, so the first load can take a minute. Uploaded documents are deleted when you reload the page. A shared free LLM key allows roughly 50–130 questions a day across all visitors.)
+
 Drop in a PDF and it measures the document, decides how to split it, and tells you why while it works. Ask a question and it shows every search, every score, and every time it fixes its own mistake, escalating from plain vector search to hybrid search with reranking and query rewriting until the answer is grounded.
 
 Rebuilt from [gurezende/SelfHealingRAG](https://github.com/gurezende/SelfHealingRAG) (credit to Gustavo R. Santos for the original idea and graph) into a service you can deploy: FastAPI + LangGraph backend, Next.js frontend, Groq for inference, Qdrant + Redis for state.
