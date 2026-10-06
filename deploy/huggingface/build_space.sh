@@ -22,10 +22,7 @@ else
   # requirements.txt from pyproject's dependency list, so the two cannot drift
   awk '/^dependencies = \[/{f=1;next} f&&/^\]/{f=0} f{gsub(/^[ \t]*"|",?[ \t]*$/,"");print}' \
     "$root/backend/pyproject.toml" > "$out/requirements.txt"
-  # Gradio 4.44.1 (pinned by the Space README) imports HfFolder, removed in huggingface_hub 1.0
-  echo "huggingface_hub<1.0" >> "$out/requirements.txt"
-  # Gradio 4.44.1 crashes building its API schema with pydantic >= 2.11
-  echo "pydantic<2.11" >> "$out/requirements.txt"
+  # ZeroGPU's startup check needs the Space's own helper package
   echo "spaces" >> "$out/requirements.txt"
   # the app is imported from this folder, not installed
   rm "$out/pyproject.toml"
