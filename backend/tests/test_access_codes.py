@@ -52,3 +52,14 @@ def test_status_endpoint_reports_whether_a_code_is_needed(monkeypatch):
     assert client.get("/auth/status").json() == {"required": False}
     monkeypatch.setattr(get_settings(), "access_codes", "abc")
     assert client.get("/auth/status").json() == {"required": True}
+
+
+def test_the_spaces_placeholder_page_is_open_but_nothing_else_under_a_similar_name():
+    async def ok(request):
+        return PlainTextResponse("ok")
+
+    inner = Starlette(routes=[Route("/ui/x", ok), Route("/uixyz", ok)])
+    inner.add_middleware(AccessCodeMiddleware, codes=["letmein-123"])
+    client = TestClient(inner.build_middleware_stack())
+    assert client.get("/ui/x").status_code == 200
+    assert client.get("/uixyz").status_code == 401

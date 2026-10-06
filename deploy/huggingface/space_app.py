@@ -18,21 +18,27 @@ for key, value in {
 }.items():
     os.environ.setdefault(key, value)
 
-# ZeroGPU Spaces refuse to start unless some function is marked @spaces.GPU.
-# This app never uses a GPU; the no-op below only satisfies that startup check.
-# On CPU hardware the `spaces` package is absent and this is skipped.
-try:
-    import spaces  # type: ignore[import-not-found]
-
-    @spaces.GPU
-    def _satisfy_zerogpu_check() -> None:
-        return None
-except ImportError:
-    pass
-
 import uvicorn  # noqa: E402
 
 from app.main import app  # noqa: E402
+
+# ZeroGPU Spaces refuse to start unless a function marked @spaces.GPU is wired
+# into a Gradio event. This app never uses a GPU; the no-op page below only
+# satisfies that check and is mounted under /ui. On CPU hardware the `spaces`
+# package is absent and none of this runs.
+try:
+    import gradio as gr  # noqa: E402
+    import spaces  # type: ignore[import-not-found]  # noqa: E402
+
+    @spaces.GPU
+    def _satisfy_zerogpu_check(text: str = "") -> str:
+        return "ok"
+
+    _page = gr.Interface(fn=_satisfy_zerogpu_check, inputs=gr.Textbox(), outputs=gr.Textbox(),
+                         title="ResilientRAG API", description="This Space serves an API. See /docs.")
+    app = gr.mount_gradio_app(app, _page, path="/ui")
+except ImportError:
+    pass
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "7860")), workers=1)

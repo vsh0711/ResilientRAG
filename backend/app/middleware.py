@@ -150,7 +150,13 @@ class AccessCodeMiddleware(BaseHTTPMiddleware):
         self._codes = [c.strip() for c in raw.split(",") if c.strip()]
 
     async def dispatch(self, request: Request, call_next):
-        if not self._codes or request.method == "OPTIONS" or request.url.path in _OPEN_PATHS:
+        if (
+            not self._codes
+            or request.method == "OPTIONS"
+            or request.url.path in _OPEN_PATHS
+            or request.url.path == "/ui"
+            or request.url.path.startswith("/ui/")  # the Space's no-op Gradio page, nothing sensitive
+        ):
             return await call_next(request)
         supplied = request.headers.get("x-access-code", "")
         if not any(hmac.compare_digest(supplied.encode(), c.encode()) for c in self._codes):
