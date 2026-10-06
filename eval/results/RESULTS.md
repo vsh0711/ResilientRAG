@@ -45,15 +45,38 @@ Caveats, stated plainly:
 - Defect found by this run: when the judge call failed, the old code scored the answer 0.00 and kept escalating retrieval on correct answers. That is why some traces show 0.00 scores next to correct answers. Fixed afterwards (`judge_unavailable`, commit "Do not heal when the judge itself is unavailable"); the fix has a unit test but this benchmark has not been re-run with it.
 - The `agent` accuracy of 96% includes those wasted retries, so it does not reflect the fixed behaviour.
 
-## 3. What limits real use: the Groq free tier
+## 3. Load test, 100 concurrent users (complete, infrastructure only)
 
-Read from response headers on this key: 8,000 tokens per minute and 1,000 requests per day, per model. One question costs about 1,500 to 4,000 tokens, so this key sustains roughly 2 to 5 questions per minute in total. That is the actual ceiling for a 100-user deployment; it is a provider quota, not a property of the code. A paid Groq tier, or a shorter prompt per judge, is required before 100 people use it.
+Real production stack in Docker (Caddy HTTPS → Next.js → 2 uvicorn workers → Qdrant + Redis), 6 CPUs and 4 GB for the Docker VM, Locust running on the same machine. 100 users ramped at 10/s for 4 minutes, 10–30 s think time. Mix: 70% policy lookups, 15% readiness checks, 8% PDF uploads (each upload is byte-different, so the server's "same file" shortcut cannot hide the analysis cost). **No LLM calls in this run**, so Groq's quota cannot skew it. File: `load_infra_stats.csv`.
 
-A second benchmark run, started with 2 workers, collapsed into upstream failures for this reason and was discarded. A third run with 1 worker and Retry-After handling was started and then stopped before finishing; no numbers from it are used anywhere.
+| endpoint | requests | failures | p50 | p95 | p99 |
+|---|---|---|---|---|---|
+| GET /documents/chunking | 849 | 0 | 0.03 s | 0.12 s | 0.16 s |
+| GET /health/ready | 188 | 0 | 0.13 s | 0.28 s | 0.89 s |
+| POST /documents (upload + analyse + embed) | 81 | 0 | 20 s | 30 s | 33 s |
+| POST /documents answered "busy" (deliberate 429 after 20 s) | 7 | 0 | 20 s | 20 s | 20 s |
+| **all** | **1,125** | **0** | 0.04 s | 16 s | 29 s |
+
+Upload latency is high because at most 4 uploads run at once (2 per worker) and the rest queue; solo, an upload takes about 1.6 s. Locust shares the 6 cores, so a dedicated host will do better. Backend memory settled at about 2 GB.
+
+Four defects this test found, all fixed and covered by tests:
+1. **Unbounded upload concurrency.** The first run pegged all 6 cores at 2.9 GB and returned 503 to every upload after about 70 s. Uploads are now capped and answered with a fast 429.
+2. **Readiness probe blocked the event loop.** `/health/ready` made synchronous Qdrant/Redis calls on the loop (up to 38 s). It now runs in worker threads.
+3. **Thread-pool starvation.** The default pool (about 10 threads) was filled by questions waiting on the LLM, starving the probe (p95 68 s). The pool is now sized to the concurrency caps and probes have their own threads.
+4. **Abandoned questions kept spending quota.** A timed-out question's thread kept retrying LLM calls. Requests now carry a deadline the client honours, cancelled on timeout or client disconnect.
+
+## 4. What limits real use: the Groq free tier
+
+Read from response headers and error messages on this key, per model: **8,000 tokens per minute, 200,000 tokens per day, 1,000 requests per day.** One question costs roughly 1,500 to 4,000 tokens, so the daily token cap alone allows on the order of 50 to 130 questions per day, and the per-minute cap sustains only a few per minute. Running these benchmarks and load tests exhausted the judge model's daily budget ("Used 199732 of 200000"). The client now detects a spent daily budget and switches to the fallback model immediately instead of retrying.
+
+Because of this, **question throughput at 100 users was not measured successfully**: the load-test runs that included questions failed on quota, not on the server. A paid Groq tier is required before 100 people use this. That is a provider limit, not a code limit, but it is the deciding one.
+
+A second end-to-end benchmark run collapsed into upstream failures for the same reason and was discarded. A third was stopped. No numbers from them are used.
 
 ## Not measured
 
+- Question latency and failure rate at 100 concurrent users (blocked by the quota above).
 - Refusal rate on unanswerable questions (`run_bench.py unanswerable` exists, never run).
-- Load test with 100 concurrent users (`loadtest/locustfile.py` exists, never run; the quota above makes it uninformative on this key).
-- End-to-end accuracy after the judge fix, the Retry-After backoff, the 500-character default and the recalibrated picker.
+- End-to-end accuracy after the judge fix, Retry-After backoff, the 500-character default, the recalibrated picker and the deadline fix.
 - Statistical significance of the agent vs baseline gap.
+- Behaviour on a dedicated host (the load generator shared the machine).

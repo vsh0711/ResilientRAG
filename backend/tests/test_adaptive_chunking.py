@@ -356,3 +356,76 @@ def test_query_stream_releases_its_slot_even_when_the_graph_explodes(monkeypatch
     # every slot is free again
     sem = query_router._semaphore()
     assert sem._value == query_router.get_settings().max_concurrent_queries
+
+
+# ------------------------------------------------------- load protection
+
+class MemoryCache:
+    def __init__(self):
+        self.data = {}
+
+    def set_persistent(self, key, value):
+        self.data[key] = value
+
+    def get_json(self, key):
+        return self.data.get(key)
+
+
+def _stream_upload(client, name="a.pdf"):
+    return client.post(
+        "/documents/stream",
+        files={"file": (name, io.BytesIO(b"%PDF-1.4 identical bytes"), "application/pdf")},
+    )
+
+
+def test_the_same_file_is_not_analysed_twice(monkeypatch, tmp_path):
+    calls = {"extract": 0}
+
+    def counting_extract(_p):
+        calls["extract"] += 1
+        return structured_pages()
+
+    monkeypatch.setattr(documents_router, "extract_pages", counting_extract)
+    monkeypatch.setattr(documents_router, "index_document", lambda h, c: None)
+    monkeypatch.setattr(documents_router, "_embed_fn", lambda: None)
+    monkeypatch.setattr(documents_router, "_narrate", lambda facts: None)
+    monkeypatch.setattr(documents_router, "_redis", MemoryCache())
+    monkeypatch.setattr(documents_router, "load_chunks", lambda h: ["x"])
+    monkeypatch.setattr(documents_router.get_settings(), "upload_dir", str(tmp_path))
+    client = TestClient(app)
+
+    first = sse_events(_stream_upload(client).text)
+    second = sse_events(_stream_upload(client).text)
+    assert calls["extract"] == 1
+    assert second[-1]["type"] == "done"
+    assert second[-1]["upload"]["document_id"] == first[-1]["upload"]["document_id"]
+    assert any("exact file before" in e.get("text", "") for e in second)
+    assert any(e["type"] == "decision" for e in second)  # the reasoning is replayed
+
+
+def test_a_full_house_gets_a_fast_429_not_a_long_wait(monkeypatch, tmp_path):
+    import asyncio
+
+    monkeypatch.setattr(documents_router, "_redis", MemoryCache())
+    monkeypatch.setattr(documents_router, "_upload_slots", asyncio.Semaphore(0))
+    monkeypatch.setattr(documents_router.get_settings(), "upload_queue_timeout_seconds", 0.05)
+    monkeypatch.setattr(documents_router.get_settings(), "upload_dir", str(tmp_path))
+    client = TestClient(app)
+    response = _stream_upload(client)
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "15"
+    assert list(tmp_path.glob("*.pdf")) == []  # temp file cleaned up
+
+
+def test_slots_are_released_after_an_upload_fails(monkeypatch, tmp_path):
+    import asyncio
+
+    sem = asyncio.Semaphore(1)
+    monkeypatch.setattr(documents_router, "_upload_slots", sem)
+    monkeypatch.setattr(documents_router, "_redis", MemoryCache())
+    monkeypatch.setattr(documents_router, "extract_pages", lambda _p: ["", " "])
+    monkeypatch.setattr(documents_router, "_embed_fn", lambda: None)
+    monkeypatch.setattr(documents_router.get_settings(), "upload_dir", str(tmp_path))
+    client = TestClient(app)
+    _stream_upload(client)
+    assert sem._value == 1

@@ -33,5 +33,5 @@ eval/results/*_local.json
 frontend/tsconfig.tsbuildinfo
 frontend/public/_test/
 
-# Load-test output
-eval/results/load*
+# Load-test HTML report (the stats CSV is committed)
+eval/results/*.html

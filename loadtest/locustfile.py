@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 import random
+import uuid
 from pathlib import Path
 
 from locust import HttpUser, between, events, task
@@ -36,7 +38,15 @@ random.Random(3).shuffle(FORMS)
 _next = itertools.cycle(FORMS)
 
 SMALL_PDF = ROOT / "eval/bench/docs/fieldnotes.pdf"
+SMALL_PDF_BYTES = SMALL_PDF.read_bytes()
 state: dict = {"doc": None}
+CODE = os.environ.get("ACCESS_CODE", "")
+
+
+def W(name: str, default: int) -> int:
+    """Task weights are overridable so the LLM-heavy share can be dialled down
+    when the provider quota, not the server, is the limit."""
+    return int(os.environ.get(name, default))
 
 
 @events.test_start.add_listener
@@ -44,20 +54,25 @@ def upload_shared_document(environment, **_):
     import requests
 
     with open(ROOT / "eval/bench/docs/manual.pdf", "rb") as f:
-        r = requests.post(f"{environment.host}/documents", files={"file": ("manual.pdf", f, "application/pdf")}, timeout=300)
+        r = requests.post(f"{environment.host}/documents", files={"file": ("manual.pdf", f, "application/pdf")},
+                          headers={"X-Access-Code": CODE}, timeout=300, verify=False)
     r.raise_for_status()
     state["doc"] = r.json()["document_id"]
     print(f"shared document: {state['doc']} ({r.json()['strategy_id']})")
 
 
 class Person(HttpUser):
-    wait_time = between(15, 45)
+    wait_time = between(int(os.environ.get("WAIT_MIN", 15)), int(os.environ.get("WAIT_MAX", 45)))
+
+    def on_start(self):
+        self.client.verify = False
+        self.client.headers.update({"X-Access-Code": CODE, "X-Session-Id": uuid.uuid4().hex})
 
     def next_question(self) -> str:
         q, form = next(_next)
         return q[form]
 
-    @task(70)
+    @task(W("W_ASK", 70))
     def ask(self):
         with self.client.post(
             "/query",
@@ -71,7 +86,7 @@ class Person(HttpUser):
             elif r.status_code != 200:
                 r.failure(f"{r.status_code}")
 
-    @task(10)
+    @task(W("W_STREAM", 10))
     def ask_stream(self):
         with self.client.post(
             "/query/stream",
@@ -91,18 +106,26 @@ class Person(HttpUser):
             if '"type": "result"' not in last:
                 r.failure("stream ended without a result")
 
-    @task(10)
+    @task(W("W_POLICY", 10))
     def policy(self):
         self.client.get("/documents/chunking", name="GET /documents/chunking")
 
-    @task(5)
+    @task(W("W_UPLOAD", 5))
     def upload(self):
-        with open(SMALL_PDF, "rb") as f:
-            self.client.post(
-                "/documents", files={"file": ("notes.pdf", f, "application/pdf")},
-                name="POST /documents", timeout=200,
-            )
+        # Trailing bytes after %%EOF change the file hash but not the text, so the
+        # server's "already read this exact file" shortcut cannot hide the cost
+        # of parsing and analysing a new upload.
+        body = SMALL_PDF_BYTES + b"\n%" + uuid.uuid4().hex.encode()
+        with self.client.post(
+            "/documents", files={"file": ("notes.pdf", body, "application/pdf")},
+            name="POST /documents", timeout=200, catch_response=True,
+        ) as r:
+            if r.status_code == 429:
+                r.success()  # a deliberate, fast "busy" is the designed behaviour
+                r.request_meta["name"] = "POST /documents (429 busy)"
+            elif r.status_code != 200:
+                r.failure(f"{r.status_code}")
 
-    @task(5)
+    @task(W("W_READY", 5))
     def ready(self):
         self.client.get("/health/ready", name="GET /health/ready")

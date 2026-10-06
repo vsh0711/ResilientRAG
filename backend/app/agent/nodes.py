@@ -17,7 +17,7 @@ from typing import Any
 
 from app.agent.cache import AnswerCache, hash_chunks
 from app.agent.judges import LLMCallError, judge_faithfulness, judge_relevance
-from app.agent.llm import ResilientLLMClient
+from app.agent.llm import ResilientLLMClient, deadline_var
 from app.exceptions import RetrievalBackendError
 from app.agent.query_rewrite import rewrite_query
 from app.agent.retrieval import retrieve
@@ -214,6 +214,9 @@ def make_score_node(llm: ResilientLLMClient):
 def should_retry(state: RAGState) -> str:
     settings = get_settings()
     if state.get("failure_reason") == FailureReason.JUDGE_UNAVAILABLE.value:
+        return "end"
+    d = deadline_var.get()
+    if d and d.over:  # no point starting another round nobody will read
         return "end"
     if state["score"] < settings.score_pass_threshold and state["retry_count"] < state["max_retries"]:
         return "retry"

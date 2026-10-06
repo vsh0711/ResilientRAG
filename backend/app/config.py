@@ -81,9 +81,13 @@ class Settings(BaseSettings):
     # Honor X-Forwarded-For only behind a proxy you control.
     trust_proxy: bool = False
     # How long one /query may run, and how long it may wait for a free slot.
-    query_timeout_seconds: float = 180.0
+    query_timeout_seconds: float = 90.0
     query_queue_timeout_seconds: float = 15.0
     max_concurrent_queries: int = 12
+    # Parsing + chunking + embedding is CPU and memory heavy. Unbounded, a burst of
+    # uploads thrashes the box (observed: 6 cores pegged, 2.9 GB, every call 503).
+    max_concurrent_uploads: int = 2
+    upload_queue_timeout_seconds: float = 20.0
     # Qdrant RPCs fail in a few seconds instead of hanging the request.
     qdrant_timeout_seconds: float = 5.0
     # Comma-separated access codes. Empty means the API is open (local dev).

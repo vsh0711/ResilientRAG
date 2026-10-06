@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -29,6 +30,49 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 _DOC_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _redis: SafeRedisCache | None = None
+_upload_slots: asyncio.Semaphore | None = None
+
+
+def _slots() -> asyncio.Semaphore:
+    global _upload_slots
+    if _upload_slots is None:
+        _upload_slots = asyncio.Semaphore(get_settings().max_concurrent_uploads)
+    return _upload_slots
+
+
+async def _acquire_upload_slot() -> None:
+    """Wait briefly for a slot, then say so. A fast 429 beats a 70 s 503."""
+    try:
+        await asyncio.wait_for(_slots().acquire(), timeout=get_settings().upload_queue_timeout_seconds)
+    except TimeoutError:
+        raise HTTPException(
+            status_code=429,
+            detail="Many files are being read right now. Try again in a few seconds.",
+            headers={"Retry-After": "15"},
+        )
+
+
+def _file_key(sha: str) -> str:
+    return f"upload:{sha}"
+
+
+def _known_upload(sha: str) -> dict | None:
+    """The result of reading this exact file before, if that document still exists."""
+    record = _chunk_cache().get_json(_file_key(sha))
+    if not isinstance(record, dict) or "upload" not in record:
+        return None
+    try:
+        load_chunks(record["upload"]["document_id"])
+    except Exception:
+        return None
+    return record
+
+
+def _remember_upload(sha: str, events: list[dict], body: UploadResponse) -> None:
+    try:
+        _chunk_cache().set_persistent(_file_key(sha), {"events": events, "upload": body.model_dump()})
+    except Exception:
+        logger.warning("Could not remember upload %s", sha, exc_info=True)
 
 
 def _chunk_cache() -> SafeRedisCache:
@@ -140,7 +184,7 @@ async def chunking_policy() -> ChunkingResponse:
     return ChunkingResponse(**describe_chunking())
 
 
-async def _receive_pdf(file: UploadFile) -> str:
+async def _receive_pdf(file: UploadFile) -> tuple[str, str]:
     """Stream the upload to a temp file inside upload_dir, enforcing type and size."""
     filename = file.filename or ""
     if not filename.lower().endswith(".pdf"):
@@ -153,8 +197,10 @@ async def _receive_pdf(file: UploadFile) -> str:
     os.close(fd)
     try:
         written = 0
+        digest = hashlib.sha256()
         with open(temp_path, "wb") as f:
             while chunk := await file.read(1024 * 1024):
+                digest.update(chunk)
                 written += len(chunk)
                 if written > max_bytes:
                     raise PayloadTooLargeError(
@@ -169,7 +215,7 @@ async def _receive_pdf(file: UploadFile) -> str:
         if os.path.exists(temp_path):
             os.remove(temp_path)
         raise
-    return temp_path
+    return temp_path, digest.hexdigest()
 
 
 def _narrate(facts: str) -> str | None:
@@ -221,7 +267,16 @@ def _finish(plan, document_hash: str, pages: int) -> UploadResponse:
 
 @router.post("", response_model=UploadResponse)
 async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
-    temp_path = await _receive_pdf(file)
+    temp_path, sha = await _receive_pdf(file)
+    known = _known_upload(sha)
+    if known:
+        os.remove(temp_path)
+        return UploadResponse(**known["upload"])
+    try:
+        await _acquire_upload_slot()
+    except BaseException:
+        os.remove(temp_path)
+        raise
     try:
         try:
             loaded = await asyncio.to_thread(load_document, temp_path)
@@ -246,8 +301,11 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
         if plan is not None:
             update.update(strategy_id=plan.strategy_id, strategy_label=plan.strategy_label,
                           rationale=plan.rationale)
-        return body.model_copy(update=update)
+        result = body.model_copy(update=update)
+        _remember_upload(sha, [], result)
+        return result
     finally:
+        _slots().release()
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
@@ -259,11 +317,27 @@ def _sse(event: dict) -> bytes:
 @router.post("/stream", response_model=None)
 async def upload_document_stream(file: UploadFile = File(...)) -> StreamingResponse:
     """Same as POST /documents, but narrates every decision as server-sent events."""
-    temp_path = await _receive_pdf(file)
+    temp_path, sha = await _receive_pdf(file)
+    known = _known_upload(sha)
+    if not known:
+        try:
+            await _acquire_upload_slot()
+        except BaseException:
+            os.remove(temp_path)
+            raise
 
     async def events():
+        slot_held = not known
         try:
             yield _sse({"type": "stage", "stage": "upload", "text": f"Received {file.filename}."})
+            if known:
+                yield _sse({"type": "think", "text": "I have read this exact file before, so I am reusing that analysis."})
+                for event in known["events"]:
+                    if event["type"] not in ("stage", "done"):
+                        yield _sse(event)
+                yield _sse({"type": "done", "upload": known["upload"]})
+                return
+            seen: list[dict] = []
             try:
                 pages = await asyncio.to_thread(extract_pages, temp_path)
             except UnreadableDocumentError as exc:
@@ -273,6 +347,7 @@ async def upload_document_stream(file: UploadFile = File(...)) -> StreamingRespo
             holder: dict = {}
             gen = plan_chunking(pages, embed_fn=_embed_fn(), narrate=_narrate, holder=holder)
             async for event in iterate_in_threadpool(gen):
+                seen.append(event)
                 yield _sse(event)
             plan = holder.get("plan")
             if plan is None:
@@ -290,11 +365,14 @@ async def upload_document_stream(file: UploadFile = File(...)) -> StreamingRespo
                 return
             save_chunks(document_hash, plan.chunks)
             body = _finish(plan, document_hash, len(pages))
+            _remember_upload(sha, [e for e in seen if e["type"] != "stage"], body)
             yield _sse({"type": "done", "upload": body.model_dump()})
         except Exception:
             logger.error("Upload stream failed", exc_info=True)
             yield _sse({"type": "error", "detail": "Something went wrong while reading this file."})
         finally:
+            if slot_held:
+                _slots().release()
             if os.path.exists(temp_path):
                 os.remove(temp_path)
 

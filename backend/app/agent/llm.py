@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -51,6 +52,41 @@ class LLMCallError(Exception):
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return self.message
+
+
+class Deadline:
+    """A budget shared between the request handler and the worker thread.
+
+    Timing out a thread via asyncio.wait_for abandons it without stopping it:
+    the LLM calls keep retrying and keep spending the provider's token quota
+    long after nobody is listening. The handler sets this; the client checks
+    it before every attempt and every sleep, so abandoned work stops.
+    """
+
+    def __init__(self, seconds: float):
+        self.expires = time.monotonic() + seconds
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+    @property
+    def over(self) -> bool:
+        return self.cancelled or time.monotonic() >= self.expires
+
+
+deadline_var: ContextVar[Optional[Deadline]] = ContextVar("llm_deadline", default=None)
+
+
+def _past_deadline() -> bool:
+    d = deadline_var.get()
+    return bool(d and d.over)
+
+
+def _daily_quota_exhausted(exc: Exception) -> bool:
+    """Groq reports per-day limits as '(TPD)' / '(RPD)' in a 429. Those do not recover in seconds."""
+    text = str(exc)
+    return isinstance(exc, RateLimitError) and ("(TPD)" in text or "(RPD)" in text)
 
 
 def _retry_after_seconds(exc: Exception) -> Optional[float]:
@@ -140,6 +176,12 @@ class ResilientLLMClient:
                 self._settings.llm_max_retries if model_idx == 0 else 1
             )
             for attempt in range(1, max_attempts + 1):
+                if _past_deadline():
+                    raise LLMCallError(
+                        message="Stopped: the request deadline passed or the client left",
+                        attempts=attempts,
+                        last_exception=last_exc,
+                    )
                 attempts += 1
                 try:
                     kwargs: dict[str, Any] = dict(
@@ -169,6 +211,11 @@ class ResilientLLMClient:
                     )
                 except RETRYABLE_EXCEPTIONS as exc:
                     last_exc = exc
+                    if _daily_quota_exhausted(exc):
+                        # Waiting a minute cannot refill a daily budget. Go
+                        # straight to the next model instead of sleeping on it.
+                        logger.warning("Daily token quota exhausted for %s; switching model", candidate_model)
+                        break
                     logger.warning(
                         "LLM call failed (model=%s, attempt=%d/%d): %s",
                         candidate_model, attempt, max_attempts, exc,
@@ -180,6 +227,9 @@ class ResilientLLMClient:
                         retry_after = _retry_after_seconds(exc)
                         if retry_after is not None:
                             backoff = max(backoff, min(retry_after, 30.0))
+                        d = deadline_var.get()
+                        if d:  # never sleep past the point nobody is waiting
+                            backoff = min(backoff, max(d.expires - time.monotonic(), 0.0))
                         time.sleep(backoff)
                 except Exception as exc:  # non-retryable
                     last_exc = exc

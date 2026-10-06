@@ -2,7 +2,7 @@
 
 A self-healing Retrieval-Augmented Generation agent that detects *why* an answer is bad — bad retrieval or bad grounding — and automatically escalates its own strategy before retrying.
 
-This is a from-scratch rebuild of [gurezende/SelfHealingRAG](https://github.com/gurezende/SelfHealingRAG), restructured as a production-shaped portfolio project: a FastAPI + LangGraph backend, a Next.js frontend, Groq for inference, persistent Qdrant + Redis, Docker, a 111-test suite, and a real-PDF evaluation harness. Credit to [Gustavo R. Santos](https://gustavorsantos.me) for the original concept and graph design.
+This is a from-scratch rebuild of [gurezende/SelfHealingRAG](https://github.com/gurezende/SelfHealingRAG), restructured as a production-shaped portfolio project: a FastAPI + LangGraph backend, a Next.js frontend, Groq for inference, persistent Qdrant + Redis, Docker, a 130-test suite, and a real-PDF evaluation harness. Credit to [Gustavo R. Santos](https://gustavorsantos.me) for the original concept and graph design.
 
 ## Why the rename
 
@@ -19,7 +19,7 @@ This is a from-scratch rebuild of [gurezende/SelfHealingRAG](https://github.com/
 | LLM calls | Unguarded `client.chat.completions.create(...)` — any API error crashes the run | Retry with exponential backoff, then fall back to a smaller model, with per-call latency/token capture |
 | UI coupling | Business logic (`nodes.py`) imports `streamlit` directly — can't run headlessly | Nodes are pure functions returning plain dicts; UI is a separate Next.js app talking to a FastAPI backend |
 | Caching | None — same question re-embeds and re-asks every time | Redis-backed embedding/answer cache, degrades to a no-op if Redis is unreachable rather than crashing (see [Caching](#caching)) |
-| Tests | None | 111 tests (see [Testing](#testing)) |
+| Tests | None | 130 tests (see [Testing](#testing)) |
 | Evaluation | None | Labeled 20-question eval set, offline retrieval metrics + baseline-vs-healed generation metrics (see [Evaluation](#evaluation)) |
 | Deployment | `streamlit run app.py` only | Dockerized (backend, frontend, Qdrant, Redis via `docker-compose`) |
 | API hardening | None — single-user local script | Request-ID correlation, Redis-backed rate limiting, typed exception handling (no leaked stack traces), upload size limits, liveness + readiness health checks |
@@ -131,13 +131,45 @@ npm install
 npm run dev
 ```
 
+## Deploying
+
+Everything below was run for real on the Docker stack. What it does not cover is listed under [Not measured](#not-measured).
+
+**What you need:** a host with 4 CPUs and 8 GB RAM (the stack used about 2 GB for the backend at rest and peaked near 3 GB), Docker with Compose v2.24+, a domain pointing at the host (ports 80 and 443 open), and a **paid Groq key**.
+
+```bash
+cp .env.example .env
+# edit .env:
+#   GROQ_API_KEY=...            a paid-tier key
+#   DOMAIN=rag.example.com      Caddy gets a Let's Encrypt certificate for this
+#   ACCESS_CODES=...            openssl rand -base64 18   (comma-separate to issue several)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+curl https://rag.example.com/api/proxy/health/ready -H "X-Access-Code: <a code>"
+```
+
+What the production overlay does:
+- Only Caddy (80/443) is published. Qdrant has no authentication of its own, so it, Redis and the backend publish no ports.
+- Every API route needs an `X-Access-Code`; the UI asks for it once. `/health` and `/auth/status` stay open. Revoke a code by removing it from `ACCESS_CODES` and restarting the backend. Compose refuses to start the overlay if `ACCESS_CODES` is empty.
+- HSTS and security headers, gzip, a 25 MB body cap, and no buffering of the streamed reasoning.
+- `restart: unless-stopped` on every service. Qdrant, Redis and Caddy state live in named volumes.
+
+Rehearse locally with `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` and open `https://localhost` (accept the local certificate).
+
+Operating notes and known gaps:
+- **Access codes are not user accounts.** Anyone holding a code shares its rate limit headroom and can see any document if they know its ID (an unguessable hash). There is no per-user history.
+- **No retention policy.** Uploaded documents and their vectors are kept until you delete the volumes.
+- **No backups or metrics.** Back up the `qdrant_data` and `redis_data` volumes yourself; logs carry a request ID on every line.
+- **Scanned PDFs** without a text layer are rejected; there is no OCR.
+- `/health/ready` reports `degraded` (HTTP 503) when a configured Groq model disappears from your key. Point your uptime monitor at it.
+- Tune `MAX_CONCURRENT_QUERIES`, `MAX_CONCURRENT_UPLOADS`, `RATE_LIMIT_PER_MINUTE` and `UVICORN_WORKERS` for your hardware; defaults are in `.env.example`.
+
 ## Testing
 
 Unit + integration tests use a fake LangGraph-compatible `VectorStore` and `LLMClient` (see `backend/tests/conftest.py`), so the whole suite runs offline with no API key and no Docker services — including the real Qdrant engine in `:memory:` mode for the vector-store plumbing tests.
 
 ```
 $ cd backend && pytest tests/ --cov=app --cov-report=term-missing
-111 passed
+130 passed
 ```
 
 | Module | Coverage |
@@ -217,15 +249,19 @@ Retry 1 escalated dense → dense+rerank and widened the budget. Retry 2 escalat
 - **Retired models.** The repo's default Groq models no longer exist for this key; every answer and judge call would have failed. Replaced, and `/health/ready` now reports missing models.
 - **Judge outage treated as a bad answer.** A rate-limited judge scored correct answers 0.00 and the loop escalated retrieval for nothing. Now ends with `failure_reason=judge_unavailable` and returns the answer unverified. Unit-tested, but the benchmark has not been re-run with the fix, so the 96% above includes those wasted retries.
 
+### Load test: 100 concurrent users (infrastructure, no LLM)
+
+1,125 requests, **0 failures**, on the real Docker stack. Policy lookups p95 0.12 s, readiness p95 0.28 s; uploads are capped at 4 concurrent and queue (median 20 s under this load, about 1.6 s when alone), with a deliberate fast 429 beyond that. The test found and fixed four defects: unbounded upload concurrency (6 cores pegged, every upload 503), a readiness probe that blocked the event loop (38 s), thread-pool starvation, and abandoned questions that kept spending LLM quota. Details in [`RESULTS.md`](eval/results/RESULTS.md).
+
 ### What limits real use: the Groq free tier
 
-Read from response headers on this key: **8,000 tokens per minute and 1,000 requests per day, per model.** One question costs about 1,500–4,000 tokens, so this key sustains roughly 2–5 questions per minute in total. That is the real ceiling for a 100-user deployment. It is a provider quota, not a property of the code, and it needs a paid Groq tier before 100 people use this. The client now honours `Retry-After` and backs off longer, but that only smooths bursts.
+Per model on this key: **8,000 tokens per minute, 200,000 tokens per day, 1,000 requests per day.** A question costs about 1,500–4,000 tokens, so the free tier allows roughly 50–130 questions per day. Running the benchmarks exhausted the judge model's daily budget. The client now switches to the fallback model immediately when a daily budget is spent. Question throughput at 100 users was therefore **not** measured successfully; those runs failed on quota. **A paid Groq tier is required before 100 people use this.**
 
 ### Not measured
 
 - Refusal rate on unanswerable questions (`run_bench.py unanswerable` exists, never run).
-- The 100-user load test (`loadtest/locustfile.py` exists, never run; the quota above makes it uninformative on this key).
-- End-to-end accuracy after the judge fix, Retry-After backoff, the 500-character default and the recalibrated picker.
+- Question latency and failure rate at 100 concurrent users (blocked by the quota above).
+- End-to-end accuracy after the judge fix, Retry-After backoff, the 500-character default, the recalibrated picker and the deadline fix.
 - Statistical significance of the agent vs baseline gap.
 
 ### Reproduce

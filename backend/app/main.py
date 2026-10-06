@@ -36,6 +36,16 @@ def _warmup_models() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    # asyncio's default pool is min(32, cpus + 4), about 10 here. A dozen
+    # questions blocked on LLM calls would use all of it and starve every other
+    # to_thread caller, including the readiness probe (measured: 68 s p95).
+    cfg = get_settings()
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(max_workers=cfg.max_concurrent_queries + cfg.max_concurrent_uploads + 16)
+    )
     if get_settings().warmup_models:
         import asyncio
 
@@ -127,6 +137,11 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+from concurrent.futures import ThreadPoolExecutor as _TPE
+
+# Probes get their own threads so a busy app can still say whether it is healthy.
+_PROBE_POOL = _TPE(max_workers=2, thread_name_prefix="probe")
+
 _model_check: tuple[float, list[str]] = (0.0, [])
 
 
@@ -154,7 +169,7 @@ async def _missing_llm_models() -> list[str]:
         return sorted(wanted - have)
 
     try:
-        missing = await asyncio.to_thread(_list)
+        missing = await asyncio.get_running_loop().run_in_executor(_PROBE_POOL, _list)
     except Exception:
         return []  # Groq unreachable is a different problem; do not claim models are missing
     _model_check = (time.monotonic(), missing)
@@ -167,23 +182,30 @@ async def readiness() -> JSONResponse:
     A 200 with cache_available=false still means the API itself is up
     (caching fails open), so this intentionally never returns 503 on
     Redis alone; only report degraded for things that would make /query
-    actually fail."""
-    redis_cache = SafeRedisCache()
-    qdrant_ok = True
-    qdrant_detail = "ok"
-    try:
-        from app.agent.vectorstore import VectorStore
-        VectorStore().is_indexed("__readiness_probe__")
-    except Exception as exc:  # pragma: no cover - depends on live infra
-        qdrant_ok = False
-        qdrant_detail = str(exc)
+    actually fail.
 
+    The Redis and Qdrant clients are synchronous. Calling them on the event
+    loop froze every request behind a slow dependency (measured: 38 s), so
+    they run in worker threads."""
+    import asyncio
+
+    def _probe() -> tuple[bool, bool, str]:
+        redis_ok = SafeRedisCache().available
+        try:
+            from app.agent.vectorstore import VectorStore
+
+            VectorStore().is_indexed("__readiness_probe__")
+            return redis_ok, True, "ok"
+        except Exception as exc:  # pragma: no cover - depends on live infra
+            return redis_ok, False, str(exc)
+
+    redis_ok, qdrant_ok, qdrant_detail = await asyncio.get_running_loop().run_in_executor(_PROBE_POOL, _probe)
     llm_missing = await _missing_llm_models()
     llm_ok = not llm_missing
     body = {
         "status": "ok" if (qdrant_ok and llm_ok) else "degraded",
         "dependencies": {
-            "redis_cache": {"available": redis_cache.available},
+            "redis_cache": {"available": redis_ok},
             "qdrant": {"available": qdrant_ok, "detail": qdrant_detail},
             "groq_api_key_configured": bool(settings.groq_api_key),
             "llm_models": {"available": llm_ok, "missing": llm_missing},

@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import iterate_in_threadpool
 
 from app.agent.graph import build_graph, initial_state
+from app.agent.llm import Deadline, deadline_var
 from app.config import get_settings
 from app.exceptions import RetrievalBackendError
 from app.routers.documents import load_chunks
@@ -64,13 +65,18 @@ async def run_query(request: QueryRequest) -> QueryResponse | JSONResponse:
             headers={"Retry-After": "15"},
         )
 
+    deadline = Deadline(settings.query_timeout_seconds)
+    deadline_var.set(deadline)  # copied into the worker thread by to_thread
     try:
         try:
             result = await asyncio.wait_for(
                 asyncio.to_thread(graph.invoke, state),
                 timeout=settings.query_timeout_seconds,
             )
-        except TimeoutError as exc:
+        except (TimeoutError, asyncio.CancelledError) as exc:
+            deadline.cancel()  # stop the abandoned thread from spending quota
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             raise RetrievalBackendError("query deadline exceeded") from exc
     finally:
         sem.release()
@@ -143,6 +149,9 @@ async def run_query_stream(request: QueryRequest) -> StreamingResponse | JSONRes
             headers={"Retry-After": "15"},
         )
 
+    deadline = Deadline(settings.query_timeout_seconds)
+    deadline_var.set(deadline)
+
     async def events():
         merged: dict = dict(state)
         started = time.perf_counter()
@@ -167,6 +176,7 @@ async def run_query_stream(request: QueryRequest) -> StreamingResponse | JSONRes
             logger.error("Query stream failed", exc_info=True)
             yield _sse({"type": "error", "detail": "Something went wrong while answering."})
         finally:
+            deadline.cancel()  # client left or run finished: stop any remaining work
             sem.release()
 
     return StreamingResponse(
