@@ -2,7 +2,7 @@
 
 Base URL: wherever the backend runs (`http://localhost:8000` in dev; behind Docker's Caddy it is `https://<domain>/api/proxy`). Interactive docs at `/docs`.
 
-When `ACCESS_CODES` is set, every route except `/health`, `/health/ready` and `/auth/status` needs the header `X-Access-Code: <code>`; otherwise the API answers `401 {"detail":"A valid access code is required."}`. Send `X-Session-Id: <8–64 chars of [A-Za-z0-9_-]>` so rate limits are per browser session instead of per IP.
+When `ACCESS_CODES` is set, every route except `/health`, `/health/ready` and `/auth/status` needs the header `X-Access-Code: <code>`; otherwise the API answers `401 {"detail":"A valid access code is required."}`. Send `X-Tab-Id: <8–64 chars>` (the UI generates a new one per page load) so documents can expire when their last tab leaves. Send `X-Session-Id: <8–64 chars of [A-Za-z0-9_-]>` so rate limits are per browser session instead of per IP.
 
 ## Endpoints
 
@@ -14,6 +14,7 @@ When `ACCESS_CODES` is set, every route except `/health`, `/health/ready` and `/
 | GET | `/documents/chunking` | default chunking policy and the seven strategies |
 | POST | `/documents` | upload a PDF, wait, get the result as JSON |
 | POST | `/documents/stream` | same upload, narrated as server-sent events |
+| POST | `/documents/{id}/release` | this browser tab is done with the document (page reload/close); deleted when no tab still uses it. No-op unless expiry is enabled |
 | POST | `/query` | ask a question, get the final answer as JSON |
 | POST | `/query/stream` | same, narrated node by node |
 
@@ -59,7 +60,7 @@ Multipart form, field `file` (PDF, ≤ 20 MB).
 
 Both `/stream` endpoints return `text/event-stream`; each frame is `data: <json>\n\n`. Validation errors (wrong type, too big, unknown document, busy) are returned **before** streaming starts as ordinary HTTP errors.
 
-**Upload events** (`type`): `stage` {stage, text} · `think` {text} · `profile` {profile} · `scores` {rows[{id,name,built,score,verdict,reason}]} · `decision` {strategy_id,label,why} · `chunked` {num_chunks,avg,min,max,sample,sizes[]} · `done` {upload} · `error` {detail}. A file seen before replays `think`/`scores`/`decision`/`chunked` instantly.
+**Upload events** (`type`): `stage` {stage, text} · `think` {text} · `reused` (this exact file was read before: skip the commentary) · `profile` {profile} · `scores` {rows[{id,name,built,score,verdict,reason}]} · `decision` {strategy_id,label,why} · `chunked` {num_chunks,avg,min,max,sample,sizes[]} · `done` {upload} · `error` {detail}. A file seen before replays `think`/`scores`/`decision`/`chunked` instantly.
 
 **Query events**: `start` · `retrieve` {attempt,mode,budget,query,docs[]} · `generate` {attempt,answer,cached} · `score` {attempt,relevance,faithfulness,combined,failure_reason,passed,threshold} · `heal` {step} · `result` {result} (same shape as POST /query) · `error` {detail}.
 

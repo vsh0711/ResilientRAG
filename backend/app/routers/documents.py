@@ -8,12 +8,13 @@ import os
 import re
 import tempfile
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Header, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import iterate_in_threadpool
 
 from app.agent.cache import SafeRedisCache, hash_chunks
 from app.agent.chunking import describe_chunking, plan_chunking
+from app.agent.registry import DocumentRegistry
 from app.agent.document_loader import extract_pages, load_document
 from app.config import get_settings
 from app.exceptions import (
@@ -56,23 +57,64 @@ def _file_key(sha: str) -> str:
     return f"upload:{sha}"
 
 
+_LOCAL_UPLOADS: dict[str, dict] = {}  # same-file records when Redis is absent
+registry = DocumentRegistry()
+_TAB_ID = re.compile(r"[A-Za-z0-9_-]{8,64}")
+
+
 def _known_upload(sha: str) -> dict | None:
     """The result of reading this exact file before, if that document still exists."""
-    record = _chunk_cache().get_json(_file_key(sha))
+    record = _LOCAL_UPLOADS.get(sha) or _chunk_cache().get_json(_file_key(sha))
     if not isinstance(record, dict) or "upload" not in record:
         return None
     try:
         load_chunks(record["upload"]["document_id"])
     except Exception:
+        _LOCAL_UPLOADS.pop(sha, None)
         return None
     return record
 
 
 def _remember_upload(sha: str, events: list[dict], body: UploadResponse) -> None:
+    record = {"events": events, "upload": body.model_dump()}
+    if len(_LOCAL_UPLOADS) > 500:  # bound memory; entries are only a shortcut
+        _LOCAL_UPLOADS.clear()
+    _LOCAL_UPLOADS[sha] = record
     try:
-        _chunk_cache().set_persistent(_file_key(sha), {"events": events, "upload": body.model_dump()})
+        _chunk_cache().set_persistent(_file_key(sha), record)
     except Exception:
         logger.warning("Could not remember upload %s", sha, exc_info=True)
+
+
+def tab_id(value: str | None) -> str | None:
+    return value if value and _TAB_ID.fullmatch(value) else None
+
+
+def touch_document(document_id: str, tab: str | None) -> None:
+    """Record that this browser tab is using the document (no-op when expiry is off)."""
+    if get_settings().document_expiry_enabled and tab:
+        registry.touch(document_id, tab)
+
+
+def delete_document(document_id: str) -> None:
+    """Remove a document from every store. Each step is independent: one failing must not strand the rest."""
+    _require_document_id(document_id)
+    try:
+        from app.agent.vectorstore import VectorStore
+
+        VectorStore().delete(document_id)
+    except Exception:
+        logger.warning("Could not delete vectors for %s", document_id, exc_info=True)
+    try:
+        os.remove(_chunks_path(document_id))
+    except FileNotFoundError:
+        pass
+    except Exception:
+        logger.warning("Could not delete chunk file for %s", document_id, exc_info=True)
+    _chunk_cache().delete(f"docchunks:{document_id}")
+    for sha in [k for k, v in _LOCAL_UPLOADS.items() if v["upload"]["document_id"] == document_id]:
+        del _LOCAL_UPLOADS[sha]
+    logger.info("Deleted document %s", document_id)
 
 
 def _chunk_cache() -> SafeRedisCache:
@@ -266,11 +308,14 @@ def _finish(plan, document_hash: str, pages: int) -> UploadResponse:
 
 
 @router.post("", response_model=UploadResponse)
-async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
+async def upload_document(
+    file: UploadFile = File(...), x_tab_id: str | None = Header(default=None)
+) -> UploadResponse:
     temp_path, sha = await _receive_pdf(file)
     known = _known_upload(sha)
     if known:
         os.remove(temp_path)
+        touch_document(known["upload"]["document_id"], tab_id(x_tab_id))
         return UploadResponse(**known["upload"])
     try:
         await _acquire_upload_slot()
@@ -303,6 +348,7 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
                           rationale=plan.rationale)
         result = body.model_copy(update=update)
         _remember_upload(sha, [], result)
+        touch_document(result.document_id, tab_id(x_tab_id))
         return result
     finally:
         _slots().release()
@@ -315,9 +361,12 @@ def _sse(event: dict) -> bytes:
 
 
 @router.post("/stream", response_model=None)
-async def upload_document_stream(file: UploadFile = File(...)) -> StreamingResponse:
+async def upload_document_stream(
+    file: UploadFile = File(...), x_tab_id: str | None = Header(default=None)
+) -> StreamingResponse:
     """Same as POST /documents, but narrates every decision as server-sent events."""
     temp_path, sha = await _receive_pdf(file)
+    tab = tab_id(x_tab_id)
     known = _known_upload(sha)
     if not known:
         try:
@@ -331,6 +380,8 @@ async def upload_document_stream(file: UploadFile = File(...)) -> StreamingRespo
         try:
             yield _sse({"type": "stage", "stage": "upload", "text": f"Received {file.filename}."})
             if known:
+                touch_document(known["upload"]["document_id"], tab)
+                yield _sse({"type": "reused"})  # the UI skips its commentary pacing
                 yield _sse({"type": "think", "text": "I have read this exact file before, so I am reusing that analysis."})
                 for event in known["events"]:
                     if event["type"] not in ("stage", "done"):
@@ -366,6 +417,7 @@ async def upload_document_stream(file: UploadFile = File(...)) -> StreamingRespo
             save_chunks(document_hash, plan.chunks)
             body = _finish(plan, document_hash, len(pages))
             _remember_upload(sha, [e for e in seen if e["type"] != "stage"], body)
+            touch_document(document_hash, tab)
             yield _sse({"type": "done", "upload": body.model_dump()})
         except Exception:
             logger.error("Upload stream failed", exc_info=True)
@@ -381,3 +433,30 @@ async def upload_document_stream(file: UploadFile = File(...)) -> StreamingRespo
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/{document_id}/release")
+async def release_document(document_id: str, x_tab_id: str | None = Header(default=None)) -> dict:
+    """This browser tab is done with the document (page reload or close).
+
+    The document is deleted when no other tab still uses it. Does nothing unless
+    DOCUMENT_EXPIRY_ENABLED is set. Always answers 200: a page that is closing
+    cannot do anything useful with an error.
+    """
+    _require_document_id(document_id)
+    tab = tab_id(x_tab_id)
+    if not get_settings().document_expiry_enabled or not tab:
+        return {"released": False, "deleted": False}
+    last_owner = registry.release(document_id, tab)
+    if last_owner:
+        await asyncio.to_thread(delete_document, document_id)
+    return {"released": True, "deleted": last_owner}
+
+
+async def sweep_expired() -> int:
+    """Delete documents nobody has used for DOCUMENT_TTL_MINUTES. Backstop for tabs that never said goodbye."""
+    settings = get_settings()
+    gone = registry.expired(settings.document_ttl_minutes * 60)
+    for document_id in gone:
+        await asyncio.to_thread(delete_document, document_id)
+    return len(gone)

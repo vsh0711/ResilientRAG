@@ -46,14 +46,28 @@ async def lifespan(app: FastAPI):
     asyncio.get_running_loop().set_default_executor(
         ThreadPoolExecutor(max_workers=cfg.max_concurrent_queries + cfg.max_concurrent_uploads + 16)
     )
+    sweeper = None
+    if cfg.document_expiry_enabled:
+        from app.routers.documents import sweep_expired
+
+        async def _sweep_forever() -> None:
+            while True:
+                await asyncio.sleep(60)
+                try:
+                    await sweep_expired()
+                except Exception:
+                    logger.exception("Document sweep failed")
+
+        sweeper = asyncio.create_task(_sweep_forever())
     if get_settings().warmup_models:
-        import asyncio
 
         try:
             await asyncio.to_thread(_warmup_models)
         except Exception:
             logger.exception("Embedding model warmup failed; the first upload will retry it")
     yield
+    if sweeper:
+        sweeper.cancel()
 
 
 app = FastAPI(

@@ -89,6 +89,14 @@ class SafeRedisCache:
         except Exception as exc:
             logger.warning("Redis SET failed for %s: %s", key, exc)
 
+    def delete(self, key: str) -> None:
+        if not self._client:
+            return
+        try:
+            self._client.delete(key)
+        except Exception as exc:
+            logger.warning("Redis DEL failed for %s: %s", key, exc)
+
     def increment(self, key: str, ttl_seconds: int) -> Optional[int]:
         """Atomically increments a counter, setting its expiry only the
         first time it's created (so a fixed window actually expires on

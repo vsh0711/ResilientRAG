@@ -5,7 +5,7 @@ import json
 import logging
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import iterate_in_threadpool
 
@@ -13,7 +13,7 @@ from app.agent.graph import build_graph, initial_state
 from app.agent.llm import Deadline, deadline_var
 from app.config import get_settings
 from app.exceptions import RetrievalBackendError
-from app.routers.documents import load_chunks
+from app.routers.documents import load_chunks, tab_id, touch_document
 from app.schemas import QueryRequest, QueryResponse
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,9 @@ def _semaphore() -> asyncio.Semaphore:
 
 
 @router.post("", response_model=QueryResponse)
-async def run_query(request: QueryRequest) -> QueryResponse | JSONResponse:
+async def run_query(
+    request: QueryRequest, x_tab_id: str | None = Header(default=None)
+) -> QueryResponse | JSONResponse:
     """Run the healing loop off the event loop.
 
     `graph.invoke` is synchronous and holds the worker for the whole
@@ -51,6 +53,7 @@ async def run_query(request: QueryRequest) -> QueryResponse | JSONResponse:
     Groq and the embedding models.
     """
     chunks = load_chunks(request.document_id)
+    touch_document(request.document_id, tab_id(x_tab_id))
     graph = get_graph()
     settings = get_settings()
     state = initial_state(chunks=chunks, query=request.question, max_retries=request.max_retries)
@@ -132,9 +135,12 @@ def _node_event(node: str, delta: dict, state: dict) -> dict | None:
 
 
 @router.post("/stream", response_model=None)
-async def run_query_stream(request: QueryRequest) -> StreamingResponse | JSONResponse:
+async def run_query_stream(
+    request: QueryRequest, x_tab_id: str | None = Header(default=None)
+) -> StreamingResponse | JSONResponse:
     """Same loop as POST /query, narrated node by node as server-sent events."""
     chunks = load_chunks(request.document_id)
+    touch_document(request.document_id, tab_id(x_tab_id))
     graph = get_graph()
     settings = get_settings()
     state = initial_state(chunks=chunks, query=request.question, max_retries=request.max_retries)

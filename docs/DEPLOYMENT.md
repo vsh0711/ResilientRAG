@@ -100,6 +100,7 @@ All settings are environment variables read by `backend/app/config.py`; defaults
 | `ACCESS_CODES` | empty (open) | comma-separated shared codes |
 | `RATE_LIMIT_PER_MINUTE` / `IP_RATE_LIMIT_PER_MINUTE` | 60 / 1200 | per session / per IP |
 | `TRUST_PROXY` | false | read `X-Forwarded-For`; only behind a proxy you control |
+| `DOCUMENT_EXPIRY_ENABLED` / `DOCUMENT_TTL_MINUTES` | false (true in the Space) / 120 | delete a document when its last tab reloads or closes, or after this many idle minutes. In-process bookkeeping: **single worker only** |
 | `MAX_UPLOAD_SIZE_MB` | 20 | |
 | `MAX_CONCURRENT_QUERIES` / `MAX_CONCURRENT_UPLOADS` | 12 / 2 | per worker |
 | `QUERY_TIMEOUT_SECONDS` / `QUERY_QUEUE_TIMEOUT_SECONDS` / `UPLOAD_QUEUE_TIMEOUT_SECONDS` | 90 / 15 / 20 | deadlines |

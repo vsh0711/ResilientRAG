@@ -19,6 +19,9 @@ for key, value in {
     "MAX_CONCURRENT_QUERIES": "4",
     "MAX_CONCURRENT_UPLOADS": "2",
     "TRUST_PROXY": "true",
+    # one worker, so the in-process bookkeeping is correct: delete a document when its
+    # last tab reloads or closes, or after 2 idle hours
+    "DOCUMENT_EXPIRY_ENABLED": "true",
     "WARMUP_MODELS": "true",  # download the three embedding models at start, not on the first upload
 }.items():
     os.environ.setdefault(key, value)

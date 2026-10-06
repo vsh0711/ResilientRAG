@@ -13,6 +13,10 @@ Rebuild of [gurezende/SelfHealingRAG](https://github.com/gurezende/SelfHealingRA
 - Docker production overlay with Caddy HTTPS; free-demo packaging for Vercel + a Hugging Face Gradio-SDK Space (no Docker).
 - Real-PDF benchmark (`eval/`), load-test scenario (`loadtest/`), and `docs/`.
 
+### Added (later)
+- Documents expire when their last browser tab reloads or closes, or after 2 idle hours (opt-in, on in the free Space).
+- Re-uploading the same file is instant, with or without Redis; the "Already read" list was removed.
+
 ### Changed
 - Default chunk size 1,600 → 500 characters, from measurement.
 - Default models replaced (the previous ones were retired).

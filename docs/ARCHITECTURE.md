@@ -145,6 +145,12 @@ Combined score = 0.5 × relevance + 0.5 × faithfulness; pass threshold 0.8 (`SC
 
 `<hash>` is a content hash of the chunk list, so the same text indexed twice is embedded once, including across healing retries. The answer cache keys on retrieval mode so a cached `dense` answer is never served after the loop escalated.
 
+### Document lifetime
+
+With `DOCUMENT_EXPIRY_ENABLED` (on in the free Space) each browser **tab** registers as an owner of a document when it uploads or asks about it. The UI sends a per-page-load `X-Tab-Id` and calls `POST /documents/{id}/release` as the page closes or reloads (`fetch` with `keepalive`). A document is deleted from vectors, disk and Redis when its last owner releases it, or when no owner has touched it for `DOCUMENT_TTL_MINUTES` (a sweep runs every minute). Because a document id is a content hash, two people with the same file share one document, so it survives until both are gone. Bookkeeping is in-process (`agent/registry.py`), which is why it is single-worker only.
+
+Re-uploading the exact same file (sha256) while its document still exists skips all analysis: the server answers with a `reused` event and the stored result. Without Redis that record lives in process memory.
+
 ## 6. Request pipeline and security
 
 Outer to inner: `RequestIDMiddleware` → `RateLimitMiddleware` → `AccessCodeMiddleware` → router. Rate limiting is outside access control so rejected calls still count.
@@ -174,7 +180,7 @@ The server finishes its analysis in well under a second; the UI paces the events
 
 - The two unbuilt chunking strategies (see §2).
 - Access codes are not accounts: no per-user history, no document ownership.
-- No retention policy: documents persist until the volumes are deleted.
+- Retention is opt-in: with expiry off, documents persist until the volumes are deleted.
 - Scanned PDFs without text are rejected; there is no OCR.
 - Demo mode loses every document on restart and supports one worker only.
 - Throughput is bounded by the LLM provider's quota, not by this code. See [`eval/results/RESULTS.md`](../eval/results/RESULTS.md).

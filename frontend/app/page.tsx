@@ -1,42 +1,32 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import AccessGate from "./components/AccessGate";
 import ChatPanel from "./components/ChatPanel";
 import ChunkingGuide from "./components/ChunkingGuide";
 import Doodles from "./components/Doodles";
 import UploadPanel from "./components/UploadPanel";
-import { UploadResponse } from "./lib/api";
-
-type Recent = { name: string; doc: UploadResponse };
-const RECENT_KEY = "rrag-recent";
-
-function loadRecent(): Recent[] {
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(RECENT_KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed.slice(0, 5) : [];
-  } catch {
-    return [];
-  }
-}
+import { releaseDocument, UploadResponse } from "./lib/api";
 
 export default function Home() {
   const [doc, setDoc] = useState<UploadResponse | null>(null);
-  const [recent, setRecent] = useState<Recent[]>([]);
+  const current = useRef<string | null>(null);
 
-  useEffect(() => setRecent(loadRecent()), []);
-
-  const remember = useCallback((next: UploadResponse, name: string) => {
+  const onUploaded = useCallback((next: UploadResponse) => {
+    // A new file replaces the old one: let the server drop whatever is no longer in use.
+    if (current.current && current.current !== next.document_id) releaseDocument(current.current);
+    current.current = next.document_id;
     setDoc(next);
-    setRecent((prev) => {
-      const list = [{ name, doc: next }, ...prev.filter((r) => r.doc.document_id !== next.document_id)].slice(0, 5);
-      try {
-        window.localStorage.setItem(RECENT_KEY, JSON.stringify(list));
-      } catch {
-        /* private mode: the list just will not survive a reload */
-      }
-      return list;
-    });
+  }, []);
+
+  // Reloading or closing the page ends this tab's use of the document. A reload
+  // starts with no document, so the server deletes it unless another tab shares it.
+  useEffect(() => {
+    const leave = () => {
+      if (current.current) releaseDocument(current.current);
+    };
+    window.addEventListener("pagehide", leave);
+    return () => window.removeEventListener("pagehide", leave);
   }, []);
 
   return (
@@ -57,22 +47,7 @@ export default function Home() {
 
         <section className="step">
           <h2><span className="num">1</span> Give me a file</h2>
-          <UploadPanel onUploaded={remember} />
-          {recent.length > 0 && (
-            <div className="recents">
-              <span>Already read:</span>
-              {recent.map((r) => (
-                <button
-                  key={r.doc.document_id}
-                  className={`recent${doc?.document_id === r.doc.document_id ? " on" : ""}`}
-                  onClick={() => setDoc(r.doc)}
-                  title={`${r.doc.num_chunks} chunks, ${r.doc.strategy_label}`}
-                >
-                  {r.name}
-                </button>
-              ))}
-            </div>
-          )}
+          <UploadPanel onUploaded={onUploaded} />
         </section>
 
         {doc && (

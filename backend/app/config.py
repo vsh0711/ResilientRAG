@@ -89,6 +89,10 @@ class Settings(BaseSettings):
     # Parsing + chunking + embedding is CPU and memory heavy. Unbounded, a burst of
     # uploads thrashes the box (observed: 6 cores pegged, 2.9 GB, every call 503).
     max_concurrent_uploads: int = 2
+    # Delete a document when its last browser tab leaves (reload or close), or after
+    # it has been idle this long. In-process bookkeeping: single worker only.
+    document_expiry_enabled: bool = False
+    document_ttl_minutes: int = 120
     upload_queue_timeout_seconds: float = 20.0
     # Qdrant RPCs fail in a few seconds instead of hanging the request.
     qdrant_timeout_seconds: float = 5.0

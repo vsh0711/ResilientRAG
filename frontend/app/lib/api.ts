@@ -87,6 +87,13 @@ function sessionId(): string {
   }
 }
 
+/**
+ * Identifies this page load. It is deliberately NOT stored: a reload gets a new
+ * one, which is what lets the server tell "this tab left" from "this person is
+ * still around", and delete documents nobody is using.
+ */
+const TAB_ID = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : "";
+
 const CODE_KEY = "rrag-code";
 
 export function storedAccessCode(): string {
@@ -112,6 +119,7 @@ function withSession(init: RequestInit = {}): RequestInit {
   if (id) headers["X-Session-Id"] = id;
   const code = storedAccessCode();
   if (code) headers["X-Access-Code"] = code;
+  if (TAB_ID) headers["X-Tab-Id"] = TAB_ID;
   return { ...init, headers };
 }
 
@@ -203,6 +211,7 @@ export interface DocProfile {
 export type UploadEvent =
   | { type: "stage"; stage: string; text: string }
   | { type: "think"; text: string }
+  | { type: "reused" }
   | { type: "profile"; profile: DocProfile }
   | { type: "scores"; rows: StrategyScore[] }
   | { type: "decision"; strategy_id: string; label: string; why: string }
@@ -281,4 +290,17 @@ export async function askQuestionStream(
   );
   if (!res.ok) throw new Error(await readError(res, "Query failed"));
   await readStream<QueryEvent>(res, onEvent);
+}
+
+/**
+ * Tell the server this page is done with a document. Called as the page closes
+ * or reloads, so it uses keepalive: the request outlives the page. Best effort;
+ * the server also expires idle documents on its own.
+ */
+export function releaseDocument(documentId: string): void {
+  try {
+    void fetch(endpoint(`/documents/${encodeURIComponent(documentId)}/release`), withSession({ method: "POST", keepalive: true }));
+  } catch {
+    /* the page is going away; nothing to do */
+  }
 }

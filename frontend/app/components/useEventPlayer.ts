@@ -32,6 +32,8 @@ function apply(state: ThinkState, ev: UploadEvent, id: number): ThinkState {
       };
     case "think":
       return { ...state, lines: [...state.lines, { id, kind: "think", text: ev.text }] };
+    case "reused":
+      return state;
     case "profile":
       return { ...state, profile: ev.profile };
     case "scores":
@@ -87,6 +89,8 @@ export function useEventPlayer(onUpload: (u: UploadResponse) => void) {
       setPlaying(false);
       return;
     }
+    // A file the server has already read: no point narrating at reading speed.
+    if (ev.type === "reused") fast.current = true;
     setState((s) => apply(s, ev, nextId.current++));
     if (ev.type === "done") onUploadRef.current(ev.upload);
     const wait = fast.current ? 0 : delayFor(ev);

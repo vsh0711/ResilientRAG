@@ -105,6 +105,9 @@ class VectorStore:
     def collection_name(self, document_hash: str) -> str:
         return f"{self._settings.qdrant_collection}_{document_hash}"
 
+    def delete(self, document_hash: str) -> None:
+        self._client.delete_collection(self.collection_name(document_hash))
+
     def is_indexed(self, document_hash: str) -> bool:
         return self._client.collection_exists(self.collection_name(document_hash))
 
