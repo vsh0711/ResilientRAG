@@ -1,0 +1,18 @@
+# Automatic HTTPS for a real domain (Let's Encrypt). With DOMAIN unset this
+# serves http://localhost for a local rehearsal of the production stack.
+{$DOMAIN:localhost} {
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
+	# Uploads are capped at 20 MB by the API; leave headroom for multipart overhead.
+	request_body {
+		max_size 25MB
+	}
+	reverse_proxy frontend:3000 {
+		# Server-sent events must not be buffered.
+		flush_interval -1
+	}
+}

@@ -18,6 +18,8 @@ async function forward(request: Request, context: RouteContext): Promise<Respons
   if (forwarded) headers.set("x-forwarded-for", forwarded);
   const requestId = request.headers.get("x-request-id");
   if (requestId) headers.set("x-request-id", requestId);
+  const code = request.headers.get("x-access-code");
+  if (code) headers.set("x-access-code", code);
   const session = request.headers.get("x-session-id");
   if (session) headers.set("x-session-id", session);
 

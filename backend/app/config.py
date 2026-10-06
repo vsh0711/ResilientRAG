@@ -12,8 +12,10 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
+from typing import Annotated
+
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # backend/app/config.py -> repository root, so `uvicorn` started from
 # backend/ still reads the .env the user edits at the repo root.
@@ -68,7 +70,8 @@ class Settings(BaseSettings):
     chunk_overlap: int = 62
 
     # --- API ---
-    api_cors_origins: list[str] = ["http://localhost:3000"]
+    # NoDecode: accept "a,b" or a bare URL from the environment, not only JSON.
+    api_cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
     upload_dir: str = "/tmp/resilientrag_uploads"
     max_upload_size_mb: int = 20
     # Per browser session (X-Session-Id). Offices put many people behind one IP,
@@ -83,6 +86,9 @@ class Settings(BaseSettings):
     max_concurrent_queries: int = 12
     # Qdrant RPCs fail in a few seconds instead of hanging the request.
     qdrant_timeout_seconds: float = 5.0
+    # Comma-separated access codes. Empty means the API is open (local dev).
+    # When set, every route except /health* and /auth/status needs X-Access-Code.
+    access_codes: str = ""
     # Download embedding models at process start (on in Docker, off in tests).
     warmup_models: bool = False
 

@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from app.agent.cache import SafeRedisCache
 from app.config import get_settings
 from app.exceptions import PayloadTooLargeError, RetrievalBackendError, UnreadableDocumentError, retrieval_error_detail
-from app.middleware import RateLimitMiddleware, RequestIDLogFilter, RequestIDMiddleware
+from app.middleware import AccessCodeMiddleware, RateLimitMiddleware, RequestIDLogFilter, RequestIDMiddleware
 from app.routers import documents, query
 
 logging.basicConfig(
@@ -66,6 +66,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AccessCodeMiddleware)  # innermost: rate limiting still counts rejected calls
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(RequestIDMiddleware)
 
@@ -111,6 +112,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 # --- Health -------------------------------------------------------------
+
+@app.get("/auth/status")
+async def auth_status() -> dict:
+    """Lets the UI know whether to show the access-code screen."""
+    return {"required": bool([c for c in get_settings().access_codes.split(",") if c.strip()])}
+
 
 @app.get("/health")
 async def health() -> dict:

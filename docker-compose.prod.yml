@@ -1,0 +1,43 @@
+# Production overlay.
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Nothing but Caddy (80/443) is reachable from outside. Qdrant has no auth of its
+# own, so it must never publish a port.
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+  qdrant:
+    restart: unless-stopped
+    ports: !reset []
+
+  redis:
+    restart: unless-stopped
+    ports: !reset []
+
+  backend:
+    restart: unless-stopped
+    ports: !reset []
+    environment:
+      - ACCESS_CODES=${ACCESS_CODES:?set ACCESS_CODES in .env before deploying}
+      - API_CORS_ORIGINS=https://${DOMAIN:-localhost}
+      - TRUST_PROXY=true
+
+  frontend:
+    restart: unless-stopped
+    ports: !reset []
+
+volumes:
+  caddy_data:
+  caddy_config:

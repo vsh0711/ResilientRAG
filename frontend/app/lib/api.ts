@@ -79,10 +79,45 @@ function sessionId(): string {
   }
 }
 
+const CODE_KEY = "rrag-code";
+
+export function storedAccessCode(): string {
+  try {
+    return window.localStorage.getItem(CODE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveAccessCode(code: string): void {
+  try {
+    if (code) window.localStorage.setItem(CODE_KEY, code);
+    else window.localStorage.removeItem(CODE_KEY);
+  } catch {
+    /* private mode: the code just will not be remembered */
+  }
+}
+
 function withSession(init: RequestInit = {}): RequestInit {
+  const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) };
   const id = sessionId();
-  if (!id) return init;
-  return { ...init, headers: { ...(init.headers as Record<string, string> | undefined), "X-Session-Id": id } };
+  if (id) headers["X-Session-Id"] = id;
+  const code = storedAccessCode();
+  if (code) headers["X-Access-Code"] = code;
+  return { ...init, headers };
+}
+
+/** null when the server is open, otherwise whether the saved code is accepted. */
+export async function checkAccess(code?: string): Promise<{ required: boolean; ok: boolean }> {
+  const status = await fetch(endpoint("/auth/status"));
+  const { required } = (await status.json()) as { required: boolean };
+  if (!required) return { required: false, ok: true };
+  const supplied = code ?? storedAccessCode();
+  if (!supplied) return { required: true, ok: false };
+  const res = await fetch(endpoint("/documents/chunking"), {
+    headers: { "X-Access-Code": supplied, "X-Session-Id": sessionId() },
+  });
+  return { required: true, ok: res.ok };
 }
 
 async function readError(res: Response, fallback: string): Promise<string> {

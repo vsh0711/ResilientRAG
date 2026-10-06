@@ -505,3 +505,7 @@ code { font-family: var(--mono); font-size: 0.85em; background: var(--paper-2); 
 .recents { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 1rem; font-family: var(--hand); font-size: 1.25rem; }
 .recent { font-size: 1.05rem; padding: 0.1rem 0.8rem; box-shadow: 2px 2px 0 var(--ink); background: var(--card); max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent.on { background: var(--teal-soft); border-color: var(--teal); box-shadow: 2px 2px 0 var(--teal); }
+
+.gate { position: relative; z-index: 1; max-width: 520px; margin: 18vh auto 0; padding: 0 1.25rem; }
+.gate h1 { font-size: 4rem; }
+.gate-note { position: relative; z-index: 1; text-align: center; margin-top: 30vh; font-family: var(--hand); font-size: 1.5rem; }

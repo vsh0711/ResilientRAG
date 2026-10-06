@@ -7,6 +7,7 @@ had no equivalent of, since it had no concept of concurrent API clients.
 """
 from __future__ import annotations
 
+import hmac
 import logging
 import re
 import time
@@ -111,4 +112,30 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     media_type="application/json",
                     headers={"Retry-After": "60"},
                 )
+        return await call_next(request)
+
+
+_OPEN_PATHS = ("/health", "/health/ready", "/auth/status")
+
+
+class AccessCodeMiddleware(BaseHTTPMiddleware):
+    """Shared access codes. Not user accounts: it keeps a public URL from
+    being a free Groq proxy for strangers, and a leaked code is revoked by
+    removing it from ACCESS_CODES. Codes are compared in constant time."""
+
+    def __init__(self, app, codes: list[str] | None = None):
+        super().__init__(app)
+        raw = get_settings().access_codes if codes is None else ",".join(codes)
+        self._codes = [c.strip() for c in raw.split(",") if c.strip()]
+
+    async def dispatch(self, request: Request, call_next):
+        if not self._codes or request.method == "OPTIONS" or request.url.path in _OPEN_PATHS:
+            return await call_next(request)
+        supplied = request.headers.get("x-access-code", "")
+        if not any(hmac.compare_digest(supplied.encode(), c.encode()) for c in self._codes):
+            return Response(
+                content='{"detail":"A valid access code is required."}',
+                status_code=401,
+                media_type="application/json",
+            )
         return await call_next(request)

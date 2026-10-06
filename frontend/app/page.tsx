@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import AccessGate from "./components/AccessGate";
 import ChatPanel from "./components/ChatPanel";
 import ChunkingGuide from "./components/ChunkingGuide";
 import Doodles from "./components/Doodles";
@@ -41,6 +42,7 @@ export default function Home() {
   return (
     <>
       <Doodles />
+      <AccessGate>
       <main className="container">
         <header className="hero">
           <span className="eyebrow">self-healing retrieval</span>
@@ -86,6 +88,7 @@ export default function Home() {
           Dense + BM25 hybrid search · cross-encoder rerank · two independent judges · Qdrant + Redis
         </footer>
       </main>
+      </AccessGate>
     </>
   );
 }
