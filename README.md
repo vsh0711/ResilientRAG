@@ -203,6 +203,4 @@ uv run --extra dev python ../eval/run_bench.py e2e --per-doc 8 --workers 1
 
 Sentence-window and parent-child chunking (need a second index) · user accounts and document ownership · retention and deletion API · OCR for scans · semantic answer cache · ColBERT as a fifth retrieval tier · per-domain score weighting.
 
-## Credits and license
 
-Original concept and graph design: [Gustavo R. Santos](https://gustavorsantos.me), [gurezende/SelfHealingRAG](https://github.com/gurezende/SelfHealingRAG). MIT, see [LICENSE](LICENSE).
