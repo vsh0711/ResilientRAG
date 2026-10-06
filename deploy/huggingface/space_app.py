@@ -43,8 +43,17 @@ try:
 
     demo = gr.Interface(fn=predict, inputs=gr.Textbox(), outputs=gr.Textbox(),
                         title="ResilientRAG API", description="This Space serves an API. See /docs.")
-    demo.launch(server_name="127.0.0.1", server_port=7861, prevent_thread_lock=True,
-                show_api=False, quiet=True)
+    import socket
+
+    with socket.socket() as probe:  # any free port; fixed ones can be taken on the Space
+        probe.bind(("127.0.0.1", 0))
+        private_port = probe.getsockname()[1]
+    try:
+        demo.launch(server_name="127.0.0.1", server_port=private_port, prevent_thread_lock=True, quiet=True)
+    except OSError as exc:
+        # ZeroGPU has already been told about the GPU function by this point,
+        # and the API must come up regardless of this placeholder page.
+        print(f"Placeholder Gradio page not started: {exc}")
 except ImportError:
     pass
 
